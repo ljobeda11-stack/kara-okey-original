@@ -50,11 +50,12 @@ function reportUnplayable(videoId) {
   } catch (e) {}
 }
 
-export default function VideoPlayer({ song, onSongEnd, onSkip, fill = false }) {
+export default function VideoPlayer({ song, onSongEnd, onSkip, onProgress, fill = false }) {
   const wrapperRef = useRef(null);
   const mountRef = useRef(null);
   const playerRef = useRef(null);
   const onSongEndRef = useRef(onSongEnd);
+  const onProgressRef = useRef(onProgress);
   const readyTimerRef = useRef(null);
   const controlsTimerRef = useRef(null);
   const skipTimerRef = useRef(null);
@@ -70,6 +71,29 @@ export default function VideoPlayer({ song, onSongEnd, onSkip, fill = false }) {
   useEffect(() => {
     onSongEndRef.current = onSongEnd;
   }, [onSongEnd]);
+
+  useEffect(() => {
+    onProgressRef.current = onProgress;
+  }, [onProgress]);
+
+  // Report the playback position ~2x/second. The TV stage uses it to decide
+  // when the "now singing" card pops up (song start + middle) without ever
+  // touching the video itself.
+  useEffect(() => {
+    if (!song?.id) return undefined;
+    const report = () => {
+      const player = playerRef.current;
+      if (!player || !onProgressRef.current) return;
+      try {
+        const currentTime =
+          typeof player.getCurrentTime === 'function' ? player.getCurrentTime() : 0;
+        const duration = typeof player.getDuration === 'function' ? player.getDuration() : 0;
+        onProgressRef.current({ currentTime, duration });
+      } catch (e) {}
+    };
+    const interval = setInterval(report, 500);
+    return () => clearInterval(interval);
+  }, [song?.id]);
 
   // TV stage: the small play/skip/mute chrome auto-hides and reappears on
   // pointer movement, so the video fills the screen with no taps needed.

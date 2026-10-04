@@ -1,10 +1,16 @@
 'use client';
 
-import { useState } from 'react';
-import { EFFECTS, playEffect } from '@/lib/sounds';
+import { useEffect, useState } from 'react';
+import { EFFECTS, playEffect, preloadEffects } from '@/lib/sounds';
 
 export default function CheerPanel({ roomCode, singerName, compact = false }) {
   const [cooldown, setCooldown] = useState(false);
+
+  // Decode the real crowd recordings up front so the first tap already plays a
+  // real crowd instead of the synthesized fallback.
+  useEffect(() => {
+    preloadEffects();
+  }, []);
 
   const sendCheer = async (effectId) => {
     // Always play local feedback instantly (even if TV is unreachable)

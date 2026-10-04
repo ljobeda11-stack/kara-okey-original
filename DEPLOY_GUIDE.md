@@ -147,4 +147,35 @@ You **never** have to set up Vercel again! All you do is:
 
 ---
 
+## Troubleshooting: "The TV keeps jumping back to the start screen and replaying the music"
+
+**This only happens on the internet version (Vercel), never on your laptop. Here is why.**
+
+When the website runs on your own laptop there is exactly **one** copy of the app running, so it remembers your karaoke room perfectly.
+
+Vercel works differently: it runs **many temporary copies** of the app at the same time (called "serverless functions"), and it does not always send your TV and your phones to the same copy. A copy that has never heard of your room answers:
+
+> "Room ABCD? I do not know about any song playing in it. It must be empty."
+
+Your TV believes the song is over, goes back to the welcome screen, and the next answer makes it start the music again. That is the bouncing you saw. It is **not** caused by your code or by the domain you deleted - it is caused by the room memory living inside each copy.
+
+**The one-time fix (2 minutes, free):**
+
+1. Open [vercel.com](https://vercel.com) and click your `kara-okey` project.
+2. Click the **Storage** tab at the top of the page.
+3. Click **Create Database** and choose **Upstash Redis** (the free plan is plenty).
+4. Click **Connect Project** and pick your `kara-okey` project. Accept the name it suggests.
+5. That is it! Vercel automatically adds these two secret keys to your project:
+   - `UPSTASH_REDIS_REST_URL`
+   - `UPSTASH_REDIS_REST_TOKEN`
+6. Click **Redeploy** once (top-right of the Deployments tab) so the new keys are picked up.
+
+Now every copy of the app reads the room list from that one shared box, so the TV always sees the same song as the phones.
+
+> **Important:** if you ever delete the project and import it again (like when you lost your domain), do this Storage step again - the keys do not always travel with the code.
+
+**Good news:** even before you add the shared box, the app can no longer knock a live song off the TV in a loop. The TV now refuses to trust an "empty room" answer from a copy that does not know your room, so it keeps the current song on screen instead of bouncing.
+
+---
+
 *Enjoy singing with KARA-OKEY!* 🎤✨

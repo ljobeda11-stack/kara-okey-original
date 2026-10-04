@@ -1,17 +1,34 @@
-// Party soundboard — 100% synthesized with Web Audio, zero audio files.
+// Party soundboard.
+//
+// Primary source: real recorded crowd / party effects (CC0, see
+// public/sounds/CREDITS.md) shipped in /public/sounds. Each clip is decoded
+// once into the shared Web Audio context, so a single gesture on the TV
+// unlocks every later playback instead of each tap fighting autoplay rules.
+//
+// Fallback: when a recording is missing, still downloading, or the browser
+// cannot decode it, the original fully-synthesized version of that effect is
+// played so a tap is never silent.
+//
 // Used by the TV (loud) and guest phones (local feedback + broadcast to TV).
 
 export const EFFECTS = [
-  { id: 'cheer', emoji: '👏', label: 'Cheer', color: '#22c55e' },
-  { id: 'horn', emoji: '📯', label: 'Horn', color: '#f59e0b' },
-  { id: 'wow', emoji: '😮', label: 'Wow!', color: '#06b6d4' },
-  { id: 'applause', emoji: '🎉', label: 'Applause', color: '#ec4899' },
-  { id: 'laugh', emoji: '😂', label: 'Laugh', color: '#a855f7' },
-  { id: 'whistle', emoji: '🎶', label: 'Whistle', color: '#6366f1' },
+  { id: 'cheer', emoji: '👏', label: 'Cheer', color: '#22c55e', file: '/sounds/cheer.mp3', maxSeconds: 4 },
+  { id: 'horn', emoji: '📯', label: 'Horn', color: '#f59e0b', file: '/sounds/horn.mp3', maxSeconds: 2.5 },
+  { id: 'wow', emoji: '😮', label: 'Wow!', color: '#06b6d4', file: '/sounds/wow.mp3', maxSeconds: 3.5 },
+  { id: 'applause', emoji: '🎉', label: 'Applause', color: '#ec4899', file: '/sounds/applause.mp3', maxSeconds: 4.5 },
+  { id: 'laugh', emoji: '😂', label: 'Laugh', color: '#a855f7', file: '/sounds/laugh.mp3', maxSeconds: 3.5 },
+  { id: 'whistle', emoji: '🎶', label: 'Whistle', color: '#6366f1', file: '/sounds/whistle.mp3', maxSeconds: 3 },
 ];
+
+const FX_BY_ID = EFFECTS.reduce((acc, fx) => {
+  acc[fx.id] = fx;
+  return acc;
+}, {});
 
 let ctx = null;
 const lastPlay = {};
+const decoded = {}; // effectId -> decoded AudioBuffer
+const loading = {}; // effectId -> true while fetching/decoding
 
 export function unlockAudio() {
   try {
@@ -73,6 +90,73 @@ function playTone({ at = 0, dur = 0.3, from = 440, to = null, volume = 0.3, type
   osc.stop(t + dur + 0.05);
 }
 
+// --- Real recordings (primary source) --------------------------------------
+
+// Fetch + decode one clip into the shared context. Safe to call repeatedly:
+// already-decoded or in-flight clips are skipped.
+function loadEffect(fx) {
+  if (!ctx || !fx || !fx.file || decoded[fx.id] || loading[fx.id]) return;
+  loading[fx.id] = true;
+  fetch(fx.file)
+    .then((res) => (res.ok ? res.arrayBuffer() : Promise.reject(new Error('sound missing'))))
+    .then(
+      (arrayBuffer) =>
+        new Promise((resolve, reject) => {
+          try {
+            const maybePromise = ctx.decodeAudioData(arrayBuffer, resolve, reject);
+            if (maybePromise && typeof maybePromise.then === 'function') {
+              maybePromise.then(resolve, reject);
+            }
+          } catch (err) {
+            reject(err);
+          }
+        })
+    )
+    .then((buffer) => {
+      decoded[fx.id] = buffer;
+    })
+    .catch(() => {
+      // Keep the synthesized fallback for this effect.
+    })
+    .then(() => {
+      loading[fx.id] = false;
+    });
+}
+
+// Warm every clip so the very first tap already plays the real recording.
+// Call this on mount and on the first user gesture.
+export function preloadEffects() {
+  if (typeof window === 'undefined') return;
+  try {
+    if (!unlockAudio()) return;
+    EFFECTS.forEach(loadEffect);
+  } catch (e) {}
+}
+
+function playRecording(fx) {
+  const buffer = decoded[fx.id];
+  if (!buffer) return false;
+  const start = ctx.currentTime + 0.01;
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+  const gain = ctx.createGain();
+  const full = buffer.duration || 0;
+  // Long recordings (e.g. a whole race-crowd take) are trimmed to the punchy
+  // part with a short fade so back-to-back spam never overlaps into mush.
+  const playFor = fx.maxSeconds ? Math.min(fx.maxSeconds, full) : full;
+  gain.gain.setValueAtTime(1, start);
+  if (playFor > 0 && playFor < full) {
+    const fade = Math.min(0.2, playFor / 4);
+    gain.gain.setValueAtTime(1, start + Math.max(0, playFor - fade));
+    gain.gain.linearRampToValueAtTime(0.0001, start + playFor);
+  }
+  src.connect(gain);
+  gain.connect(ctx.destination);
+  src.start(start);
+  src.stop(start + playFor + 0.05);
+  return true;
+}
+
 export function playEffect(id) {
   if (typeof window === 'undefined') return;
   try {
@@ -82,7 +166,10 @@ export function playEffect(id) {
     lastPlay[id] = t;
     unlockAudio();
     if (!ctx) return;
-    const fn = builders[id] || builders.cheer;
+    const fx = FX_BY_ID[id] || EFFECTS[0];
+    loadEffect(fx); // warm the cache for the next tap
+    if (playRecording(fx)) return; // real crowd / party recording
+    const fn = builders[id] || builders.cheer; // synthesized fallback
     fn();
   } catch (e) {}
 }

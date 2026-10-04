@@ -4,13 +4,13 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import ParticleBackground from '@/components/shared/ParticleBackground';
 import Toast from '@/components/shared/Toast';
 import VideoPlayer from '@/components/host/VideoPlayer';
-import StageOverlay from '@/components/host/StageOverlay';
+import StageOverlay, { computeTitleVisible } from '@/components/host/StageOverlay';
 import IdleScreen from '@/components/host/IdleScreen';
 import CelebrationOverlay, { randomPraise } from '@/components/host/CelebrationOverlay';
 import SongTransition from '@/components/host/SongTransition';
 import HostControlsPanel from '@/components/host/HostControlsPanel';
 import useAutoFullscreen from '@/hooks/useAutoFullscreen';
-import { unlockAudio } from '@/lib/sounds';
+import { preloadEffects, unlockAudio } from '@/lib/sounds';
 import { Settings } from 'lucide-react';
 
 export default function HostPage() {
@@ -28,6 +28,7 @@ export default function HostPage() {
   const nowPlayingRef = useRef(null);
   const queueRef = useRef([]);
   const celebrationTimerRef = useRef(null);
+  const leaderboardRef = useRef([]);
 
   // Keep refs of current song and queue
   useEffect(() => {
@@ -38,13 +39,27 @@ export default function HostPage() {
     queueRef.current = queue;
   }, [queue]);
 
+  // The leaderboard is read through a ref by celebrateSong so its callback can
+  // stay referentially stable: unstable deps used to tear down and reopen the
+  // SSE connection on every stats update.
+  useEffect(() => {
+    leaderboardRef.current = leaderboard;
+  }, [leaderboard]);
+
   useEffect(() => {
     return () => clearTimeout(celebrationTimerRef.current);
+  }, []);
+
+  // Warm the real CC0 reaction recordings so the very first cheer already plays
+  // the crowd instead of the synthesized fallback.
+  useEffect(() => {
+    preloadEffects();
   }, []);
 
   // Unlock TV audio on first click/keypress (browsers block sound before gesture)
   const handleUnlockAudio = useCallback(() => {
     unlockAudio();
+    preloadEffects();
   }, []);
 
   // Auto fullscreen while a song is on the stage
@@ -68,6 +83,21 @@ export default function HostPage() {
     setCheers((prev) => prev.filter((c) => c.id !== cheerId));
   }, []);
 
+  // "Now singing" card: visible for the first 10s of each song and for 10s
+  // around its middle, hidden in between so the lyrics stay clear. The state
+  // only changes at those two window edges (see computeTitleVisible), so the
+  // 500ms progress ticks never thrash the TV with re-renders.
+  const [titleVisible, setTitleVisible] = useState(true);
+  const handleVideoProgress = useCallback(({ currentTime, duration }) => {
+    const next = computeTitleVisible(currentTime, duration);
+    setTitleVisible((prev) => (prev === next ? prev : next));
+  }, []);
+
+  // A new song means the card is due again from second zero.
+  useEffect(() => {
+    setTitleVisible(true);
+  }, [nowPlaying?.queueId, nowPlaying?.id]);
+
   // Post-song celebration
   const celebratedRef = useRef(new Set());
   const celebrateSong = useCallback((song) => {
@@ -82,14 +112,17 @@ export default function HostPage() {
     const coSingers = Array.isArray(song.coSingers) ? song.coSingers : [];
     const allSingers = [song.singerName, ...coSingers].filter(Boolean).join(' & ');
 
-    // Calculate rank text from leaderboard if available
+    // Calculate rank text from the leaderboard, read through a ref so this
+    // callback stays referentially stable (an unstable celebrateSong used to
+    // restart the SSE stream on every stats update).
     let rankText = null;
+    const board = leaderboardRef.current || [];
     const cleanSinger = (song.singerName || '').trim().toLowerCase();
-    const stat = (leaderboard || []).find(
+    const stat = board.find(
       (s) => (s.singerName || '').trim().toLowerCase() === cleanSinger
     );
     if (stat) {
-      const rank = leaderboard.indexOf(stat) + 1;
+      const rank = board.indexOf(stat) + 1;
       rankText = `🏆 Rank #${rank} tonight! (${stat.songsSung} song${stat.songsSung > 1 ? 's' : ''})`;
     }
 
@@ -102,7 +135,7 @@ export default function HostPage() {
     });
     clearTimeout(celebrationTimerRef.current);
     celebrationTimerRef.current = setTimeout(() => setCelebration(null), 4200);
-  }, [leaderboard]);
+  }, []);
 
   // 1. Initialize or load room
   useEffect(() => {
@@ -258,7 +291,11 @@ export default function HostPage() {
         const res = await fetch(`/api/room/${roomCode}`, { cache: 'no-store' });
         if (!cancelled && res.ok) {
           const data = await res.json();
-          if (data.success && data.room) {
+          // A "synthetic" room is a placeholder another serverless instance
+          // fabricated for a code it had never seen. Applying one would wipe
+          // the live song off the TV (idle screen, then autoplay again in a
+          // loop), so ignore those snapshots entirely.
+          if (data.success && data.room && !data.room.synthetic) {
             const nextSong = data.room.nowPlaying;
             const prevSong = nowPlayingRef.current;
             if (
@@ -354,6 +391,7 @@ export default function HostPage() {
           fill
           onSongEnd={handleNaturalSongEnd}
           onSkip={() => executeSkip()}
+          onProgress={handleVideoProgress}
         />
 
         <StageOverlay
@@ -361,6 +399,7 @@ export default function HostPage() {
           roomCode={roomCode}
           guestCount={guestCount}
           nextSong={queue[0] || null}
+          titleVisible={titleVisible}
         />
 
         <CelebrationOverlay

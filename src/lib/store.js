@@ -27,24 +27,30 @@ export function generateRoomCode() {
   return code;
 }
 
-export function getOrCreateRoom(roomCode) {
+function createRoomShell(code) {
+  return {
+    code,
+    createdAt: Date.now(),
+    nowPlaying: null,
+    queue: [],
+    history: [],
+    subscribers: new Set(),
+    guestCount: 1,
+    locked: false,
+    maxPerGuest: 0, // 0 = unlimited
+    hostPin: null, // Host admin PIN
+    singerStats: {}, // { [name]: { songsSung: 0, cheersReceived: 0, lastSong: '' } }
+    // true = placeholder fabricated for a code this instance had never seen.
+    // Such a room must never be handed out as an authoritative snapshot.
+    synthetic: false,
+  };
+}
+
+// Create (or fetch) the in-memory room without touching the cloud store.
+function ensureLocalRoom(roomCode) {
   const code = (roomCode || '').toUpperCase().trim();
   if (!rooms.has(code)) {
-    rooms.set(code, {
-      code,
-      createdAt: Date.now(),
-      nowPlaying: null,
-      queue: [],
-      history: [],
-      subscribers: new Set(),
-      guestCount: 1,
-      locked: false,
-      maxPerGuest: 0, // 0 = unlimited
-      hostPin: null, // Host admin PIN
-      singerStats: {}, // { [name]: { songsSung: 0, cheersReceived: 0, lastSong: '' } }
-    });
-    // Attempt cloud recovery in background if cloud store is enabled
-    syncRoomFromCloud(code).catch(() => {});
+    rooms.set(code, createRoomShell(code));
   }
   const room = rooms.get(code);
   // Ensure backward compatibility
@@ -55,17 +61,32 @@ export function getOrCreateRoom(roomCode) {
   return room;
 }
 
+export function getOrCreateRoom(roomCode) {
+  const code = (roomCode || '').toUpperCase().trim();
+  const isNew = !rooms.has(code);
+  const room = ensureLocalRoom(code);
+  if (isNew) {
+    // Attempt cloud recovery in background if cloud store is enabled
+    hydrateRoomFromCloud(code).catch(() => {});
+  }
+  return room;
+}
+
 export function getRoom(roomCode) {
   const code = (roomCode || '').toUpperCase().trim();
   if (!code) return null;
   if (rooms.has(code)) {
     return rooms.get(code);
   }
-  // On serverless environments (like Vercel), different Lambda containers
-  // can handle host and guest requests. If a valid room code (3-8 alphanumeric chars)
-  // is passed, auto-initialize the room so guests never get a 404 "Room not found".
+  // On serverless environments (like Vercel), different Lambda containers can
+  // handle host and guest requests. If a valid room code (3-8 alphanumeric
+  // chars) is passed, auto-initialize the room so guests never get a 404
+  // "Room not found" — but flag it as a synthetic placeholder so callers can
+  // tell it apart from a room whose real state this instance actually holds.
   if (/^[A-Z0-9]{3,8}$/.test(code)) {
-    return getOrCreateRoom(code);
+    const room = getOrCreateRoom(code);
+    room.synthetic = true; // cleared as soon as a cloud snapshot arrives
+    return room;
   }
   return null;
 }
@@ -477,8 +498,16 @@ function sortQueue(queue) {
   });
 }
 
-// Cloud persistence helpers for Vercel Serverless (Upstash Redis / Vercel KV)
-async function syncRoomFromCloud(roomCode) {
+// Cloud persistence helpers for Vercel Serverless (Upstash Redis / Vercel KV).
+// With these env vars set the cloud store becomes the shared source of truth
+// that lets separate serverless instances serve the same karaoke room.
+export function isCloudStoreEnabled() {
+  return Boolean(REDIS_URL && REDIS_TOKEN);
+}
+
+// Read a room snapshot out of Redis. Returns null when the store is disabled,
+// unreachable, or simply has no entry for this code yet.
+async function fetchRoomFromCloud(roomCode) {
   if (!REDIS_URL || !REDIS_TOKEN) return null;
   try {
     const res = await fetch(`${REDIS_URL}/get/karaokey:${roomCode}`, {
@@ -487,22 +516,50 @@ async function syncRoomFromCloud(roomCode) {
     });
     if (!res.ok) return null;
     const data = await res.json();
-    if (data.result) {
-      const parsed = typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
-      const room = getOrCreateRoom(roomCode);
-      if (parsed.nowPlaying !== undefined) room.nowPlaying = parsed.nowPlaying;
-      if (Array.isArray(parsed.queue)) room.queue = parsed.queue;
-      if (Array.isArray(parsed.history)) room.history = parsed.history;
-      if (parsed.locked !== undefined) room.locked = parsed.locked;
-      if (parsed.maxPerGuest !== undefined) room.maxPerGuest = parsed.maxPerGuest;
-      if (parsed.hostPin !== undefined) room.hostPin = parsed.hostPin;
-      if (parsed.singerStats) room.singerStats = parsed.singerStats;
-      return room;
-    }
+    if (!data.result) return null;
+    return typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
   } catch (e) {
     // Cloud read silent fallback
+    return null;
   }
-  return null;
+}
+
+// Merge a cloud snapshot into this instance's copy of the room.
+function applyCloudSnapshot(roomCode, parsed) {
+  if (!parsed) return null;
+  const room = ensureLocalRoom(roomCode);
+  if (parsed.nowPlaying !== undefined) room.nowPlaying = parsed.nowPlaying;
+  if (Array.isArray(parsed.queue)) room.queue = parsed.queue;
+  if (Array.isArray(parsed.history)) room.history = parsed.history;
+  if (parsed.locked !== undefined) room.locked = parsed.locked;
+  if (parsed.maxPerGuest !== undefined) room.maxPerGuest = parsed.maxPerGuest;
+  if (parsed.hostPin !== undefined) room.hostPin = parsed.hostPin;
+  if (parsed.singerStats) room.singerStats = parsed.singerStats;
+  room.synthetic = false; // real data straight from the shared store
+  return room;
+}
+
+async function hydrateRoomFromCloud(roomCode) {
+  const parsed = await fetchRoomFromCloud(roomCode);
+  if (!parsed) return null;
+  return applyCloudSnapshot(roomCode, parsed);
+}
+
+// Read path for the API routes. When the shared store is configured the
+// snapshot always comes from it, so every serverless instance reports exactly
+// the same room — this is what stops the TV stage from bouncing between the
+// idle screen and a fresh autoplay when several Lambda instances are involved.
+export async function hydrateRoom(roomCode) {
+  const code = (roomCode || '').toUpperCase().trim();
+  if (!code) return null;
+  if (isCloudStoreEnabled()) {
+    const fromCloud = await hydrateRoomFromCloud(code);
+    if (fromCloud) return fromCloud;
+    // Key missing: fall back to the local copy, which covers the brief window
+    // between creating a room and its first background sync completing.
+    return rooms.get(code) || null;
+  }
+  return getRoom(code);
 }
 
 async function syncRoomToCloud(roomCode) {

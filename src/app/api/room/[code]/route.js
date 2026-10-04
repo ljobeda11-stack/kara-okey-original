@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getRoom, resolveRoomCode } from '@/lib/store';
+import { hydrateRoom, resolveRoomCode } from '@/lib/store';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,7 +10,7 @@ export async function GET(request, { params }) {
     return NextResponse.json({ success: false, error: 'Room code is required' }, { status: 400 });
   }
 
-  const room = getRoom(code);
+  const room = await hydrateRoom(code);
 
   if (!room) {
     return NextResponse.json({ success: false, error: 'Room not found' }, { status: 404 });
@@ -26,6 +26,9 @@ export async function GET(request, { params }) {
       guestCount: room.guestCount,
       locked: !!room.locked,
       maxPerGuest: room.maxPerGuest || 0,
+      // true => this instance invented an empty placeholder for a code it does
+      // not actually know; clients must never treat it as the live room state.
+      synthetic: room.synthetic === true,
     },
   });
 }

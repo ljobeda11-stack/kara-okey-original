@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Disc3,
   Mic,
@@ -11,7 +11,7 @@ import {
   Sparkles,
   Users,
 } from 'lucide-react';
-import { playEffect } from '@/lib/sounds';
+import { playEffect, preloadEffects } from '@/lib/sounds';
 
 export default function NowPlayingBar({
   nowPlaying,
@@ -21,6 +21,12 @@ export default function NowPlayingBar({
   onOpenQueue,
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
+
+  // Pre-decode the reaction recordings so the first quick-cheer tap plays the
+  // real crowd instead of the synthesized fallback.
+  useEffect(() => {
+    preloadEffects();
+  }, []);
 
   if (!nowPlaying) return null;
 

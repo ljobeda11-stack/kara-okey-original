@@ -3,19 +3,43 @@
 import { Mic, Users, SkipForward } from 'lucide-react';
 import QRCodeDisplay from './QRCodeDisplay';
 
-// In-video overlay for the TV stage: neon music animation + song info on the
-// left, join QR code on the right. Nothing is clickable — the phone is the
+// In-video overlay for the TV stage. Nothing is clickable — the phone is the
 // remote.
 //
-// The overlay (and especially the QR code) is ALWAYS visible during playback:
-// latecomers walking into the room must be able to scan and join at any
-// second without waiting for a fade cycle or touching the TV.
-const BAR_COUNT = 26;
+// LEFT  : the neon "now singing" card. It is deliberately compact and only
+//         pops up for the first 10 seconds of a song and again for 10 seconds
+//         around the middle, so the karaoke lyrics are never covered while
+//         people are actually singing.
+// RIGHT : the join QR code only (small, top-right corner) so latecomers can
+//         always scan and join without the overlay sitting on top of the
+//         lyrics. The mascot mark is intentionally not drawn during playback.
+const BAR_COUNT = 14;
+const TITLE_WINDOW = 10; // seconds the "now singing" card stays on screen
 
-export default function StageOverlay({ song, roomCode, guestCount = 1, nextSong }) {
+// Pure helper: the host page feeds VideoPlayer's progress through this so the
+// card only toggles at the two windows instead of re-rendering every tick.
+export function computeTitleVisible(currentTime = 0, duration = 0) {
+  const t = Number.isFinite(currentTime) ? currentTime : 0;
+  if (t < TITLE_WINDOW) return true; // entry window: 0-10s
+  const d = Number.isFinite(duration) ? duration : 0;
+  if (d > TITLE_WINDOW * 2) {
+    const middle = d / 2;
+    // middle window: 10s centred on the halfway point of the song
+    if (t >= middle - TITLE_WINDOW / 2 && t < middle + TITLE_WINDOW / 2) return true;
+  }
+  return false;
+}
+
+export default function StageOverlay({
+  song,
+  roomCode,
+  guestCount = 1,
+  nextSong,
+  titleVisible = true,
+}) {
   return (
     <div
-      className="stage-overlay stage-overlay-visible"
+      className="stage-overlay"
       style={{
         position: 'fixed',
         top: 0,
@@ -25,22 +49,30 @@ export default function StageOverlay({ song, roomCode, guestCount = 1, nextSong 
         display: 'flex',
         alignItems: 'flex-start',
         justifyContent: 'space-between',
-        gap: '18px',
-        padding: 'clamp(10px, 1.8vh, 22px) clamp(14px, 2vw, 28px)',
+        gap: '14px',
+        padding: 'clamp(8px, 1.4vh, 18px) clamp(12px, 1.6vw, 24px)',
         pointerEvents: 'none',
-        opacity: 1,
       }}
     >
-      {/* LEFT: neon music animation + song / singer / up next */}
-      <div className="neon-overlay-panel" style={panelStyle}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+      {/* LEFT: compact neon card — pops in at the entry + middle windows only */}
+      <div
+        className="neon-overlay-panel"
+        style={{
+          ...panelStyle,
+          opacity: titleVisible ? 1 : 0,
+          transform: titleVisible ? 'translateY(0)' : 'translateY(-12px)',
+          transition: 'opacity 0.6s ease, transform 0.6s ease',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '9px' }}>
           {/* Equalizer bars */}
-          <div className="stage-eq" aria-hidden="true">
+          <div className="stage-eq" aria-hidden="true" style={{ height: '20px', gap: '2px' }}>
             {Array.from({ length: BAR_COUNT }).map((_, i) => (
               <span
                 key={i}
                 className="stage-eq-bar"
                 style={{
+                  width: '3px',
                   animationDelay: `${((i * 0.11) % 1.1).toFixed(2)}s`,
                   animationDuration: `${(0.6 + ((i % 5) * 0.14)).toFixed(2)}s`,
                 }}
@@ -52,15 +84,15 @@ export default function StageOverlay({ song, roomCode, guestCount = 1, nextSong 
             style={{
               display: 'inline-flex',
               alignItems: 'center',
-              gap: '6px',
-              fontSize: '0.7rem',
+              gap: '5px',
+              fontSize: '0.62rem',
               fontWeight: 800,
               letterSpacing: '0.14em',
               textTransform: 'uppercase',
               color: 'var(--neon-pink)',
             }}
           >
-            <Mic size={13} />
+            <Mic size={11} />
             Now singing
           </span>
         </div>
@@ -69,12 +101,12 @@ export default function StageOverlay({ song, roomCode, guestCount = 1, nextSong 
           className="neon-title"
           style={{
             fontFamily: 'var(--font-heading)',
-            fontSize: '1.9rem',
+            fontSize: '1.15rem',
             fontWeight: 800,
             color: '#ffffff',
-            lineHeight: 1.15,
-            marginTop: '10px',
-            maxWidth: '62vw',
+            lineHeight: 1.2,
+            marginTop: '7px',
+            maxWidth: '46vw',
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
@@ -88,8 +120,8 @@ export default function StageOverlay({ song, roomCode, guestCount = 1, nextSong 
             display: 'flex',
             alignItems: 'center',
             flexWrap: 'wrap',
-            gap: '10px',
-            marginTop: '8px',
+            gap: '7px',
+            marginTop: '6px',
           }}
         >
           <span className="badge-singer">
@@ -102,25 +134,25 @@ export default function StageOverlay({ song, roomCode, guestCount = 1, nextSong 
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '4px',
-                padding: '2px 9px',
+                padding: '1px 8px',
                 borderRadius: 'var(--radius-full)',
                 background: 'rgba(6, 182, 212, 0.25)',
                 border: '1px solid var(--neon-cyan)',
                 color: 'var(--neon-cyan)',
-                fontSize: '0.75rem',
+                fontSize: '0.66rem',
                 fontWeight: 800,
                 letterSpacing: '0.04em',
               }}
             >
-              <Users size={11} />
+              <Users size={10} />
               <span>{song?.mode === 'duet' ? 'DUET' : 'GROUP'}</span>
             </span>
           )}
           {song?.artist && (
-            <span style={{ fontSize: '0.88rem', color: 'var(--text-muted)' }}>{song.artist}</span>
+            <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>{song.artist}</span>
           )}
-          <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem' }}>
-            <Users size={12} style={{ verticalAlign: '-2px' }} /> {guestCount} connected
+          <span style={{ color: 'var(--text-dim)', fontSize: '0.68rem' }}>
+            <Users size={11} style={{ verticalAlign: '-2px' }} /> {guestCount} connected
           </span>
           {nextSong && (
             <span
@@ -128,74 +160,26 @@ export default function StageOverlay({ song, roomCode, guestCount = 1, nextSong 
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '5px',
-                fontSize: '0.82rem',
+                fontSize: '0.68rem',
                 color: 'var(--neon-cyan)',
                 fontWeight: 600,
-                maxWidth: '40vw',
+                maxWidth: '30vw',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
               }}
             >
-              <SkipForward size={12} />
+              <SkipForward size={11} />
               Up next: {nextSong.title}
             </span>
           )}
         </div>
       </div>
 
-      {/* RIGHT: app logo beside the join QR — permanently on screen */}
-      <div
-        style={{
-          flexShrink: 0,
-          display: 'flex',
-          alignItems: 'center',
-          gap: '14px',
-          padding: '12px 14px',
-          borderRadius: 'var(--radius-lg)',
-          background: 'rgba(8, 8, 20, 0.72)',
-          backdropFilter: 'blur(14px)',
-          WebkitBackdropFilter: 'blur(14px)',
-          border: '1px solid rgba(6, 182, 212, 0.4)',
-          boxShadow: 'var(--glow-cyan)',
-        }}
-      >
-        <LogoMark size={76} />
-        <QRCodeDisplay roomCode={roomCode} size={150} compact />
+      {/* RIGHT: join QR only — small, top-right corner, never covers the lyrics */}
+      <div style={{ flexShrink: 0 }}>
+        <QRCodeDisplay roomCode={roomCode} size={104} compact />
       </div>
-    </div>
-  );
-}
-
-// Small neon mascot mark kept next to the QR so the app identity stays on screen
-// during the whole song.
-function LogoMark({ size = 76 }) {
-  return (
-    <div
-      style={{
-        flexShrink: 0,
-        width: size,
-        height: size,
-        borderRadius: '16px',
-        overflow: 'hidden',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: 'radial-gradient(circle, rgba(168, 85, 247, 0.4) 0%, rgba(10, 10, 26, 0.9) 100%)',
-        boxShadow: 'var(--glow-purple), 0 0 25px rgba(236, 72, 153, 0.4)',
-        border: '1px solid rgba(168, 85, 247, 0.6)',
-        padding: '3px',
-      }}
-    >
-      <img
-        src="/images/okey-mascot.png"
-        alt="KARA-OKEY Mascot"
-        style={{
-          width: '100%',
-          height: '100%',
-          objectFit: 'contain',
-        }}
-      />
     </div>
   );
 }
@@ -203,12 +187,13 @@ function LogoMark({ size = 76 }) {
 const panelStyle = {
   display: 'flex',
   flexDirection: 'column',
-  padding: '16px 20px',
-  borderRadius: 'var(--radius-lg)',
-  background: 'rgba(8, 8, 20, 0.72)',
-  backdropFilter: 'blur(14px)',
-  WebkitBackdropFilter: 'blur(14px)',
+  padding: '11px 14px',
+  borderRadius: 'var(--radius-md)',
+  background: 'rgba(8, 8, 20, 0.68)',
+  backdropFilter: 'blur(12px)',
+  WebkitBackdropFilter: 'blur(12px)',
   border: '1px solid rgba(168, 85, 247, 0.45)',
   boxShadow: 'var(--glow-purple)',
-  maxWidth: '64vw',
+  maxWidth: '48vw',
+  transformOrigin: 'top left',
 };
