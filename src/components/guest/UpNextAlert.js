@@ -1,12 +1,32 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Mic, Sparkles, X, ChevronRight } from 'lucide-react';
 
 export default function UpNextAlert({ song, onClose }) {
-  const [visible, setVisible] = useState(true);
+  const [visible, setVisible] = useState(false);
+
+  // Keep the latest onClose in a ref so the parent re-rendering (which passes a
+  // fresh inline callback every time) never restarts this effect.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  // Identify the specific alert. A brand-new song must trigger a fresh alert,
+  // so key the effect on the song itself rather than on the callback identity.
+  const songKey = song ? song.queueId || song.id || song.title || '' : null;
 
   useEffect(() => {
+    // No song on stage: nothing to alert about (never vibrate here).
+    if (!songKey) {
+      setVisible(false);
+      return undefined;
+    }
+
+    // A new "you're up next" alert: reveal it and buzz once.
+    setVisible(true);
+
     // Vibrate device if supported
     if (typeof window !== 'undefined' && 'vibrate' in navigator) {
       try {
@@ -17,11 +37,16 @@ export default function UpNextAlert({ song, onClose }) {
     // Auto-dismiss after 9 seconds
     const timer = setTimeout(() => {
       setVisible(false);
-      if (onClose) onClose();
+      if (onCloseRef.current) onCloseRef.current();
     }, 9000);
 
     return () => clearTimeout(timer);
-  }, [onClose]);
+  }, [songKey]);
+
+  const dismiss = () => {
+    setVisible(false);
+    if (onCloseRef.current) onCloseRef.current();
+  };
 
   if (!visible || !song) return null;
 
@@ -57,10 +82,7 @@ export default function UpNextAlert({ song, onClose }) {
         }}
       >
         <button
-          onClick={() => {
-            setVisible(false);
-            if (onClose) onClose();
-          }}
+          onClick={dismiss}
           style={{
             position: 'absolute',
             top: '14px',
@@ -177,10 +199,7 @@ export default function UpNextAlert({ song, onClose }) {
         </div>
 
         <button
-          onClick={() => {
-            setVisible(false);
-            if (onClose) onClose();
-          }}
+          onClick={dismiss}
           className="btn-accent"
           style={{
             marginTop: '20px',
