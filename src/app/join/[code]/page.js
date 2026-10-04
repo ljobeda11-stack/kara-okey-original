@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { useParams } from 'next/navigation';
 import confetti from 'canvas-confetti';
 import GuestHeader from '@/components/guest/GuestHeader';
 import BottomNav from '@/components/guest/BottomNav';
@@ -13,12 +14,25 @@ import NowPlayingBar from '@/components/guest/NowPlayingBar';
 import UpNextAlert from '@/components/guest/UpNextAlert';
 import Toast from '@/components/shared/Toast';
 import ParticleBackground from '@/components/shared/ParticleBackground';
-import { Sparkles, AlertTriangle, ArrowLeft } from 'lucide-react';
+import { Sparkles, AlertTriangle, ArrowLeft, RefreshCw } from 'lucide-react';
 import Link from 'next/link';
 
 export default function GuestPage({ params }) {
-  const roomCode = (params.code || '').toUpperCase();
+  const routeParams = useParams();
 
+  // Safely extract room code from useParams(), params prop, or window location
+  const extractCode = () => {
+    const raw = routeParams?.code || params?.code || '';
+    if (typeof raw === 'string' && raw.trim()) return raw.trim().toUpperCase();
+    if (Array.isArray(raw) && raw[0]) return String(raw[0]).trim().toUpperCase();
+    if (typeof window !== 'undefined') {
+      const match = window.location.pathname.match(/\/join\/([^/?#]+)/i);
+      if (match && match[1]) return decodeURIComponent(match[1]).trim().toUpperCase();
+    }
+    return '';
+  };
+
+  const [roomCode, setRoomCode] = useState(extractCode());
   const [activeTab, setActiveTab] = useState('search');
   const [singerName, setSingerName] = useState('');
   const [nowPlaying, setNowPlaying] = useState(null);
@@ -32,9 +46,25 @@ export default function GuestPage({ params }) {
   const [upNextSong, setUpNextSong] = useState(null);
   const alertedRef = useRef(new Set());
 
+  // Keep room code up to date if router resolves later
+  useEffect(() => {
+    const c = extractCode();
+    if (c && c !== roomCode) {
+      setRoomCode(c);
+    }
+    // Also unwrap params if it's a Promise in Next.js 14.2+
+    Promise.resolve(params).then((p) => {
+      const code = p?.code || routeParams?.code;
+      if (code && typeof code === 'string' && code.trim().toUpperCase() !== roomCode) {
+        setRoomCode(code.trim().toUpperCase());
+      }
+    });
+  }, [routeParams, params]);
+
   // 1. Initialize guest identity and load room state
   useEffect(() => {
     let cancelled = false;
+
     // Unique voter ID for toggle voting
     let vId = localStorage.getItem('karaokey_voter_id');
     if (!vId) {
@@ -59,17 +89,35 @@ export default function GuestPage({ params }) {
       if (!cancelled) setFavorites(savedFaves);
     } catch (e) {}
 
-    // Fetch initial room data
+    // Fetch initial room data (only once roomCode is determined)
     async function loadRoom() {
+      if (!roomCode || roomCode.length < 2) return;
       try {
-        const res = await fetch(`/api/room/${roomCode}`);
+        const res = await fetch(`/api/room/${roomCode}`, { cache: 'no-store' });
         const data = await res.json();
         if (cancelled) return;
         if (res.ok && data.success && data.room) {
           setNowPlaying(data.room.nowPlaying);
           setQueue(data.room.queue || []);
+          setRoomError(null);
         } else {
-          setRoomError(data.error || 'Room not found');
+          // Attempt retry after 1s before locking out
+          setTimeout(async () => {
+            if (cancelled) return;
+            try {
+              const retryRes = await fetch(`/api/room/${roomCode}`, { cache: 'no-store' });
+              const retryData = await retryRes.json();
+              if (retryRes.ok && retryData.success && retryData.room) {
+                setNowPlaying(retryData.room.nowPlaying);
+                setQueue(retryData.room.queue || []);
+                setRoomError(null);
+              } else {
+                setRoomError(data.error || 'Room not found');
+              }
+            } catch (err) {
+              setRoomError('Could not connect to karaoke room');
+            }
+          }, 1200);
         }
       } catch (err) {
         if (!cancelled) setRoomError('Could not connect to karaoke room');
@@ -114,7 +162,7 @@ export default function GuestPage({ params }) {
           eventSource.close();
         } catch (e) {}
         clearTimeout(reconnectTimer);
-        reconnectTimer = setTimeout(connectSSE, 3000);
+        reconnectTimer = setTimeout(connectSSE, 4000);
       };
     }
 
@@ -128,6 +176,31 @@ export default function GuestPage({ params }) {
           eventSource.close();
         } catch (e) {}
       }
+    };
+  }, [roomCode, roomError]);
+
+  // 3. Smart HTTP Polling Fallback (runs every 2.5s for seamless multi-instance sync on Vercel)
+  useEffect(() => {
+    if (!roomCode || roomError) return;
+    let cancelled = false;
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/room/${roomCode}`, { cache: 'no-store' });
+        if (!cancelled && res.ok) {
+          const data = await res.json();
+          if (data.success && data.room) {
+            setNowPlaying(data.room.nowPlaying);
+            setQueue(data.room.queue || []);
+          }
+        }
+      } catch (e) {}
+    };
+
+    const interval = setInterval(poll, 2500);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
     };
   }, [roomCode, roomError]);
 
@@ -177,6 +250,17 @@ export default function GuestPage({ params }) {
           const modeText = song.mode === 'duet' ? ' (Duet)' : song.mode === 'group' ? ' (Group)' : '';
           setToastMessage(`🎤 "${song.title}"${modeText} added to queue!`);
           setQueuedHistory((prev) => [song, ...prev]);
+
+          // Trigger immediate local state refresh
+          fetch(`/api/room/${roomCode}`, { cache: 'no-store' })
+            .then((r) => r.json())
+            .then((d) => {
+              if (d.success && d.room) {
+                setQueue(d.room.queue || []);
+                setNowPlaying(d.room.nowPlaying);
+              }
+            })
+            .catch(() => {});
         } else {
           setToastMessage(data.error || 'Failed to add song. Try again.');
         }
@@ -298,7 +382,6 @@ export default function GuestPage({ params }) {
   // Guest drag-reorders the shared queue
   const handleReorder = useCallback(
     async (orderedQueueIds) => {
-      // Optimistic: reorder locally right away, server echoes via SSE
       setQueue((prev) => {
         const byId = new Map(prev.map((q) => [q.queueId, q]));
         const next = [];
@@ -377,16 +460,41 @@ export default function GuestPage({ params }) {
             Room Not Found
           </h2>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '8px', lineHeight: 1.5 }}>
-            Room "{roomCode}" is either inactive or expired. Make sure you scanned the latest QR code on the TV!
+            Room "{roomCode || 'unknown'}" is either inactive or expired. Make sure you scanned the latest QR code on the TV!
           </p>
-          <Link
-            href="/"
-            className="btn-primary"
-            style={{ marginTop: '24px', width: '100%', textDecoration: 'none' }}
-          >
-            <ArrowLeft size={16} />
-            <span>Go to Host Screen</span>
-          </Link>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '24px' }}>
+            <button
+              onClick={() => {
+                setRoomError(null);
+                if (roomCode) {
+                  fetch(`/api/room/${roomCode}`)
+                    .then((r) => r.json())
+                    .then((d) => {
+                      if (d.success && d.room) {
+                        setNowPlaying(d.room.nowPlaying);
+                        setQueue(d.room.queue || []);
+                      } else {
+                        setRoomError('Room not found');
+                      }
+                    })
+                    .catch(() => setRoomError('Could not connect'));
+                }
+              }}
+              className="btn-accent"
+              style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+            >
+              <RefreshCw size={16} />
+              <span>Retry Connecting</span>
+            </button>
+            <Link
+              href="/"
+              className="btn-primary"
+              style={{ width: '100%', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+            >
+              <ArrowLeft size={16} />
+              <span>Go to Host Screen</span>
+            </Link>
+          </div>
         </div>
       </main>
     );

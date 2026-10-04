@@ -7,10 +7,13 @@ import {
   setHostPin,
   verifyHostPin,
   removeFromQueue,
+  resolveRoomCode,
 } from '@/lib/store';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request, { params }) {
-  const code = params.code?.toUpperCase();
+  const code = await resolveRoomCode(request, params);
   const room = getRoom(code);
 
   if (!room) {
@@ -28,7 +31,7 @@ export async function GET(request, { params }) {
 }
 
 export async function POST(request, { params }) {
-  const code = params.code?.toUpperCase();
+  const code = await resolveRoomCode(request, params);
   const room = getRoom(code);
 
   if (!room) {

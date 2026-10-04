@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
-import { getOrCreateRoom, getRoom, addSongToQueue, removeFromQueue } from '@/lib/store';
+import { getOrCreateRoom, getRoom, addSongToQueue, removeFromQueue, resolveRoomCode } from '@/lib/store';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET(request, { params }) {
-  const code = params.code?.toUpperCase();
+  const code = await resolveRoomCode(request, params);
   const room = getRoom(code);
 
   if (!room) {
@@ -19,7 +21,7 @@ export async function GET(request, { params }) {
 }
 
 export async function POST(request, { params }) {
-  const code = params.code?.toUpperCase();
+  const code = await resolveRoomCode(request, params);
   try {
     const body = await request.json();
     const { song, singerName, mode, coSingers } = body;
@@ -55,7 +57,7 @@ export async function POST(request, { params }) {
 }
 
 export async function DELETE(request, { params }) {
-  const code = params.code?.toUpperCase();
+  const code = await resolveRoomCode(request, params);
   const { searchParams } = new URL(request.url);
   let queueId = searchParams.get('queueId');
 

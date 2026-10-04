@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
-import { voteForSong } from '@/lib/store';
+import { voteForSong, resolveRoomCode } from '@/lib/store';
+
+export const dynamic = 'force-dynamic';
 
 export async function POST(request, { params }) {
-  const code = params.code?.toUpperCase();
+  const code = await resolveRoomCode(request, params);
   try {
     const body = await request.json();
     const { queueId, voterId } = body;

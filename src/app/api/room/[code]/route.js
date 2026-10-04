@@ -1,8 +1,15 @@
 import { NextResponse } from 'next/server';
-import { getRoom } from '@/lib/store';
+import { getRoom, resolveRoomCode } from '@/lib/store';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET(request, { params }) {
-  const code = params.code?.toUpperCase();
+  const code = await resolveRoomCode(request, params);
+
+  if (!code) {
+    return NextResponse.json({ success: false, error: 'Room code is required' }, { status: 400 });
+  }
+
   const room = getRoom(code);
 
   if (!room) {
@@ -17,6 +24,8 @@ export async function GET(request, { params }) {
       queue: room.queue,
       history: room.history,
       guestCount: room.guestCount,
+      locked: !!room.locked,
+      maxPerGuest: room.maxPerGuest || 0,
     },
   });
 }

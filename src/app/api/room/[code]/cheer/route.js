@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
-import { sendCheer } from '@/lib/store';
+import { sendCheer, resolveRoomCode } from '@/lib/store';
+
+export const dynamic = 'force-dynamic';
 
 export async function POST(request, { params }) {
-  const code = params.code?.toUpperCase();
+  const code = await resolveRoomCode(request, params);
   try {
     const body = await request.json().catch(() => ({}));
     const { effectId, fromName } = body;

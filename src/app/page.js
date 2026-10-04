@@ -248,6 +248,42 @@ export default function HostPage() {
     };
   }, [roomCode, celebrateSong]);
 
+  // 3. Smart HTTP Polling Fallback (guarantees cross-instance sync on Vercel Serverless)
+  useEffect(() => {
+    if (!roomCode) return;
+    let cancelled = false;
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/room/${roomCode}`, { cache: 'no-store' });
+        if (!cancelled && res.ok) {
+          const data = await res.json();
+          if (data.success && data.room) {
+            const nextSong = data.room.nowPlaying;
+            const prevSong = nowPlayingRef.current;
+            if (
+              prevSong &&
+              nextSong &&
+              (prevSong.queueId || prevSong.id) !== (nextSong.queueId || nextSong.id)
+            ) {
+              celebrateSong(prevSong);
+            }
+            setNowPlaying(nextSong);
+            if (data.room.queue) setQueue(data.room.queue);
+            if (data.room.guestCount) setGuestCount(data.room.guestCount);
+          }
+        }
+      } catch (e) {}
+    };
+
+    const interval = setInterval(poll, 2500);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [roomCode, celebrateSong]);
+
+
   // 3. Skip to next song — with post-song celebration for the finished track
   const executeSkip = useCallback(
     async (opts = {}) => {

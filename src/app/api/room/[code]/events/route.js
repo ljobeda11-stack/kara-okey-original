@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server';
-import { addSubscriber, getRoom } from '@/lib/store';
+import { addSubscriber, getRoom, resolveRoomCode } from '@/lib/store';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request, { params }) {
-  const code = params.code?.toUpperCase();
+  const code = await resolveRoomCode(request, params);
 
-  if (!getRoom(code)) {
+  if (!code || !getRoom(code)) {
     return NextResponse.json({ success: false, error: 'Room not found.' }, { status: 404 });
   }
 
@@ -34,7 +34,7 @@ export async function GET(request, { params }) {
         return;
       }
 
-      // Keepalive interval every 25 seconds
+      // Keepalive interval every 20 seconds
       const heartbeat = setInterval(() => {
         try {
           controller.enqueue(encoder.encode(': heartbeat\n\n'));
@@ -42,7 +42,7 @@ export async function GET(request, { params }) {
           clearInterval(heartbeat);
           unsubscribe();
         }
-      }, 25000);
+      }, 20000);
 
       // Cleanup when request closes
       request.signal.addEventListener('abort', () => {

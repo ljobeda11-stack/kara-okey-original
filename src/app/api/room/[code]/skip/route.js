@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
-import { advanceQueue } from '@/lib/store';
+import { advanceQueue, resolveRoomCode } from '@/lib/store';
+
+export const dynamic = 'force-dynamic';
 
 export async function POST(request, { params }) {
-  const code = params.code?.toUpperCase();
+  const code = await resolveRoomCode(request, params);
   const result = advanceQueue(code);
 
   if (!result) {

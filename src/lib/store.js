@@ -1,11 +1,22 @@
-// Universal In-Memory Store for Real-Time Karaoke Rooms
+// Universal In-Memory + Cloud Store for Real-Time Karaoke Rooms
 // Attached to globalThis so state is preserved during Next.js hot-reloads and API calls
+// Supports Upstash Redis / Vercel KV for multi-instance serverless deployments on Vercel
 
 if (!globalThis._karaokeyRooms) {
   globalThis._karaokeyRooms = new Map();
 }
 
 const rooms = globalThis._karaokeyRooms;
+
+// Upstash Redis / Vercel KV environment variables
+const REDIS_URL =
+  process.env.UPSTASH_REDIS_REST_URL ||
+  process.env.KV_REST_API_URL ||
+  null;
+const REDIS_TOKEN =
+  process.env.UPSTASH_REDIS_REST_TOKEN ||
+  process.env.KV_REST_API_TOKEN ||
+  null;
 
 export function generateRoomCode() {
   const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
@@ -26,24 +37,53 @@ export function getOrCreateRoom(roomCode) {
       queue: [],
       history: [],
       subscribers: new Set(),
-      guestCount: 0,
+      guestCount: 1,
       locked: false,
       maxPerGuest: 0, // 0 = unlimited
       hostPin: null, // Host admin PIN
       singerStats: {}, // { [name]: { songsSung: 0, cheersReceived: 0, lastSong: '' } }
     });
+    // Attempt cloud recovery in background if cloud store is enabled
+    syncRoomFromCloud(code).catch(() => {});
   }
   const room = rooms.get(code);
-  // Ensure backward compatibility if room object was created prior
+  // Ensure backward compatibility
   if (room.locked === undefined) room.locked = false;
   if (room.maxPerGuest === undefined) room.maxPerGuest = 0;
   if (!room.singerStats) room.singerStats = {};
+  if (room.guestCount === undefined || room.guestCount < 1) room.guestCount = 1;
   return room;
 }
 
 export function getRoom(roomCode) {
   const code = (roomCode || '').toUpperCase().trim();
-  return rooms.get(code) || null;
+  if (!code) return null;
+  if (rooms.has(code)) {
+    return rooms.get(code);
+  }
+  // On serverless environments (like Vercel), different Lambda containers
+  // can handle host and guest requests. If a valid room code (3-8 alphanumeric chars)
+  // is passed, auto-initialize the room so guests never get a 404 "Room not found".
+  if (/^[A-Z0-9]{3,8}$/.test(code)) {
+    return getOrCreateRoom(code);
+  }
+  return null;
+}
+
+export async function resolveRoomCode(request, params) {
+  const resolved = await Promise.resolve(params || {});
+  let code = (resolved?.code || '').toUpperCase().trim();
+  if (!code && request?.url) {
+    try {
+      const url = new URL(request.url);
+      const segments = url.pathname.split('/').filter(Boolean);
+      const idx = segments.indexOf('room');
+      if (idx >= 0 && segments[idx + 1]) {
+        code = segments[idx + 1].toUpperCase().trim();
+      }
+    } catch (e) {}
+  }
+  return code;
 }
 
 export function broadcastRoomEvent(roomCode, event, data) {
@@ -60,6 +100,9 @@ export function broadcastRoomEvent(roomCode, event, data) {
       room.subscribers.delete(send);
     }
   }
+
+  // Trigger cloud sync in background
+  syncRoomToCloud(roomCode).catch(() => {});
 }
 
 export function addSubscriber(roomCode, send) {
@@ -233,8 +276,7 @@ export function reorderQueue(roomCode, orderedQueueIds) {
   for (const item of room.queue) {
     if (byId.has(item.queueId)) next.push(item);
   }
-  // Stamp the manual order so it survives vote ties (sortQueue is
-  // votes-desc, addedAt-asc — sequential stamps lock the arrangement in).
+  // Stamp the manual order so it survives vote ties
   const stamp = Date.now();
   next.forEach((item, i) => {
     item.addedAt = stamp + i;
@@ -313,6 +355,7 @@ export function setHostPin(roomCode, pin) {
   const room = getRoom(roomCode);
   if (!room) return false;
   room.hostPin = pin ? String(pin).trim() : null;
+  syncRoomToCloud(roomCode).catch(() => {});
   return true;
 }
 
@@ -341,8 +384,10 @@ export function joinSong(roomCode, queueId, coSingerName) {
   const cleanName = (coSingerName || '').trim();
   if (!cleanName) return { error: 'Singer name is required.' };
 
-  if (cleanName.toLowerCase() === (item.singerName || '').toLowerCase() ||
-      item.coSingers.some((s) => s.toLowerCase() === cleanName.toLowerCase())) {
+  if (
+    cleanName.toLowerCase() === (item.singerName || '').toLowerCase() ||
+    item.coSingers.some((s) => s.toLowerCase() === cleanName.toLowerCase())
+  ) {
     return { error: 'You are already signed up for this song!' };
   }
 
@@ -414,7 +459,6 @@ export function getSingerLeaderboard(roomCode) {
     singerName: s.singerName,
     songsSung: s.songsSung,
     cheersReceived: s.cheersReceived,
-    // Score formula: (songs sung * 100) + (cheers received * 10)
     score: (s.songsSung * 100) + (s.cheersReceived * 10),
     lastSong: s.lastSong,
   }));
@@ -431,4 +475,62 @@ function sortQueue(queue) {
     }
     return a.addedAt - b.addedAt;
   });
+}
+
+// Cloud persistence helpers for Vercel Serverless (Upstash Redis / Vercel KV)
+async function syncRoomFromCloud(roomCode) {
+  if (!REDIS_URL || !REDIS_TOKEN) return null;
+  try {
+    const res = await fetch(`${REDIS_URL}/get/karaokey:${roomCode}`, {
+      headers: { Authorization: `Bearer ${REDIS_TOKEN}` },
+      cache: 'no-store',
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data.result) {
+      const parsed = typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
+      const room = getOrCreateRoom(roomCode);
+      if (parsed.nowPlaying !== undefined) room.nowPlaying = parsed.nowPlaying;
+      if (Array.isArray(parsed.queue)) room.queue = parsed.queue;
+      if (Array.isArray(parsed.history)) room.history = parsed.history;
+      if (parsed.locked !== undefined) room.locked = parsed.locked;
+      if (parsed.maxPerGuest !== undefined) room.maxPerGuest = parsed.maxPerGuest;
+      if (parsed.hostPin !== undefined) room.hostPin = parsed.hostPin;
+      if (parsed.singerStats) room.singerStats = parsed.singerStats;
+      return room;
+    }
+  } catch (e) {
+    // Cloud read silent fallback
+  }
+  return null;
+}
+
+async function syncRoomToCloud(roomCode) {
+  if (!REDIS_URL || !REDIS_TOKEN) return;
+  const room = rooms.get(roomCode);
+  if (!room) return;
+  try {
+    const payload = JSON.stringify({
+      code: room.code,
+      nowPlaying: room.nowPlaying,
+      queue: room.queue,
+      history: room.history,
+      locked: room.locked,
+      maxPerGuest: room.maxPerGuest,
+      hostPin: room.hostPin,
+      singerStats: room.singerStats,
+      updatedAt: Date.now(),
+    });
+    // Set in Redis with 24h expiration (86400 seconds)
+    await fetch(`${REDIS_URL}/set/karaokey:${roomCode}?ex=86400`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${REDIS_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch (e) {
+    // Cloud write silent fallback
+  }
 }

@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
-import { getRoom, getSingerLeaderboard } from '@/lib/store';
+import { getRoom, getSingerLeaderboard, resolveRoomCode } from '@/lib/store';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET(request, { params }) {
-  const code = params.code?.toUpperCase();
+  const code = await resolveRoomCode(request, params);
   const room = getRoom(code);
 
   if (!room) {

@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
-import { reorderQueue } from '@/lib/store';
+import { reorderQueue, resolveRoomCode } from '@/lib/store';
+
+export const dynamic = 'force-dynamic';
 
 export async function PATCH(request, { params }) {
-  const code = params.code?.toUpperCase();
+  const code = await resolveRoomCode(request, params);
   try {
     const body = await request.json().catch(() => ({}));
     const { orderedQueueIds } = body;
