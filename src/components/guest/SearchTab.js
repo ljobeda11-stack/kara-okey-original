@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Search, Sparkles, X, Radio } from 'lucide-react';
+import { Search, Sparkles, X, Radio, Mic, Users } from 'lucide-react';
 import SongCard from './SongCard';
+import SongPreview from './SongPreview';
 
 // Fallbacks so the pills render instantly before /api/playlists answers.
 const FALLBACK_PLAYLISTS = [
@@ -12,7 +13,11 @@ const FALLBACK_PLAYLISTS = [
   { id: 'disney-showtunes', name: 'Disney & Showtunes', emoji: '🏰' },
 ];
 
-export default function SearchTab({ onQueueSong, favorites = [], onToggleFavorite }) {
+export default function SearchTab({
+  onQueueSong,
+  favorites = [],
+  onToggleFavorite,
+}) {
   const [query, setQuery] = useState('');
   const [playlists, setPlaylists] = useState(FALLBACK_PLAYLISTS);
   const [activePlaylist, setActivePlaylist] = useState(FALLBACK_PLAYLISTS[0].name);
@@ -22,6 +27,12 @@ export default function SearchTab({ onQueueSong, favorites = [], onToggleFavorit
   const [searchSongs, setSearchSongs] = useState([]);
   const [searching, setSearching] = useState(false);
   const [queuedIds, setQueuedIds] = useState(new Set());
+
+  // Performance mode state: 'solo' | 'duet' | 'group'
+  const [selectedMode, setSelectedMode] = useState('solo');
+
+  // Preview bottom sheet state
+  const [previewSong, setPreviewSong] = useState(null);
 
   const isSearchMode = query.trim().length > 0;
 
@@ -98,7 +109,9 @@ export default function SearchTab({ onQueueSong, favorites = [], onToggleFavorit
   }, [query, isSearchMode]);
 
   const handleQueueClick = (song) => {
-    onQueueSong(song);
+    // Attach selected performance mode
+    const songWithMode = { ...song, mode: selectedMode };
+    onQueueSong(songWithMode);
     setQueuedIds((prev) => new Set([...prev, song.id]));
     setTimeout(() => {
       setQueuedIds((prev) => {
@@ -158,6 +171,52 @@ export default function SearchTab({ onQueueSong, favorites = [], onToggleFavorit
             <X size={16} />
           </button>
         )}
+      </div>
+
+      {/* Performance Mode Selector (Solo vs Duet vs Group) */}
+      <div
+        className="glass-card"
+        style={{
+          padding: '8px 12px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '8px',
+        }}
+      >
+        <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>
+          Mode:
+        </span>
+        <div style={{ display: 'flex', gap: '6px', flex: 1 }}>
+          {[
+            { id: 'solo', label: '🎤 Solo', desc: 'Sing alone' },
+            { id: 'duet', label: '👥 Duet', desc: 'Invite 1 partner' },
+            { id: 'group', label: '💃 Group', desc: 'Up to 4 singers' },
+          ].map((m) => {
+            const active = selectedMode === m.id;
+            return (
+              <button
+                key={m.id}
+                onClick={() => setSelectedMode(m.id)}
+                style={{
+                  flex: 1,
+                  padding: '6px 8px',
+                  borderRadius: 'var(--radius-full)',
+                  border: active ? '1px solid var(--neon-purple)' : '1px solid var(--border-glass)',
+                  background: active ? 'var(--grad-primary)' : 'rgba(255, 255, 255, 0.04)',
+                  color: active ? '#ffffff' : 'var(--text-muted)',
+                  fontSize: '0.75rem',
+                  fontWeight: active ? 800 : 500,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                  boxShadow: active ? 'var(--glow-purple)' : 'none',
+                }}
+              >
+                {m.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Playlist pills — browse mode only (typing switches to live search) */}
@@ -269,10 +328,22 @@ export default function SearchTab({ onQueueSong, favorites = [], onToggleFavorit
               isQueued={queuedIds.has(song.id)}
               isFavorite={favorites.some((f) => f.id === song.id)}
               onToggleFavorite={onToggleFavorite}
+              onPreview={(s) => setPreviewSong(s)}
             />
           ))
         )}
       </div>
+
+      {/* Preview Bottom Sheet Modal */}
+      <SongPreview
+        song={previewSong}
+        isOpen={!!previewSong}
+        onClose={() => setPreviewSong(null)}
+        onQueue={handleQueueClick}
+        isQueued={previewSong ? queuedIds.has(previewSong.id) : false}
+        isFavorite={previewSong ? favorites.some((f) => f.id === previewSong.id) : false}
+        onToggleFavorite={onToggleFavorite}
+      />
     </div>
   );
 }

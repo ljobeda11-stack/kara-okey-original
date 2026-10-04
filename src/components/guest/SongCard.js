@@ -1,6 +1,6 @@
 'use client';
 
-import { Plus, Star, Check, Mic } from 'lucide-react';
+import { Plus, Star, Check, Play, Headphones } from 'lucide-react';
 
 export default function SongCard({
   song,
@@ -8,6 +8,7 @@ export default function SongCard({
   isFavorite = false,
   onToggleFavorite,
   isQueued = false,
+  onPreview,
 }) {
   return (
     <div
@@ -123,6 +124,29 @@ export default function SongCard({
 
       {/* Action Buttons */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+        {/* Preview Button */}
+        {onPreview && (
+          <button
+            onClick={() => onPreview(song)}
+            style={{
+              background: 'rgba(255, 255, 255, 0.06)',
+              border: '1px solid var(--border-glass)',
+              borderRadius: 'var(--radius-full)',
+              width: '32px',
+              height: '32px',
+              cursor: 'pointer',
+              color: 'var(--neon-cyan)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              transition: 'all 0.2s ease',
+            }}
+            title="Preview karaoke audio"
+          >
+            <Play size={13} fill="var(--neon-cyan)" style={{ marginLeft: '1px' }} />
+          </button>
+        )}
+
         {onToggleFavorite && (
           <button
             onClick={() => onToggleFavorite(song)}

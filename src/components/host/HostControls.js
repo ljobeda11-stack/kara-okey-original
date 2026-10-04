@@ -48,6 +48,26 @@ export default function HostControls({ onSkip, onAddDemo, guestCount = 1, roomCo
           <SkipForward size={15} />
           <span>Skip Track</span>
         </button>
+
+        {onOpenHostControls && (
+          <button
+            onClick={onOpenHostControls}
+            style={{
+              padding: '8px',
+              borderRadius: 'var(--radius-full)',
+              background: 'rgba(255, 255, 255, 0.06)',
+              border: '1px solid var(--border-glass)',
+              color: 'var(--text-muted)',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+            title="Host Controls"
+          >
+            <Settings size={16} />
+          </button>
+        )}
       </div>
     </div>
   );

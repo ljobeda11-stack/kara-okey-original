@@ -1,16 +1,53 @@
 'use client';
 
-import { useState } from 'react';
-import { User, Check, Mic, Music, Sparkles } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { User, Check, Mic, Music, Sparkles, Trophy, Award, Heart } from 'lucide-react';
 import MascotImage from '@/components/shared/MascotImage';
 
 export default function ProfileTab({
   singerName,
   onSaveSingerName,
   queuedHistory = [],
+  roomCode,
 }) {
   const [nameInput, setNameInput] = useState(singerName || '');
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [stats, setStats] = useState({ songsSung: 0, cheersReceived: 0, rank: null, score: 0 });
+  const [loadingStats, setLoadingStats] = useState(false);
+
+  useEffect(() => {
+    if (!roomCode || !singerName) return;
+    let cancel = false;
+    async function loadStats() {
+      setLoadingStats(true);
+      try {
+        const res = await fetch(`/api/room/${roomCode}/stats`);
+        const data = await res.json();
+        if (cancel) return;
+        if (data.success && Array.isArray(data.leaderboard)) {
+          const index = data.leaderboard.findIndex(
+            (s) => (s.singerName || '').toLowerCase() === (singerName || '').toLowerCase()
+          );
+          if (index >= 0) {
+            const myStat = data.leaderboard[index];
+            setStats({
+              songsSung: myStat.songsSung || 0,
+              cheersReceived: myStat.cheersReceived || 0,
+              rank: index + 1,
+              score: myStat.score || 0,
+            });
+          }
+        }
+      } catch (err) {}
+      finally {
+        if (!cancel) setLoadingStats(false);
+      }
+    }
+    loadStats();
+    return () => {
+      cancel = true;
+    };
+  }, [roomCode, singerName]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -88,10 +125,81 @@ export default function ProfileTab({
         </form>
       </div>
 
+      {/* Tonight's Performer Stats */}
+      <div
+        className="glass-panel"
+        style={{
+          padding: '18px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '12px',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <Trophy size={18} color="var(--neon-amber)" />
+          <h4 style={{ fontFamily: 'var(--font-heading)', fontSize: '1rem', fontWeight: 700 }}>
+            Tonight's Singer Stats
+          </h4>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
+          {/* Songs Sung */}
+          <div
+            style={{
+              padding: '12px 8px',
+              borderRadius: 'var(--radius-md)',
+              background: 'rgba(255, 255, 255, 0.04)',
+              border: '1px solid var(--border-glass)',
+              textAlign: 'center',
+            }}
+          >
+            <Mic size={16} color="var(--neon-purple)" style={{ margin: '0 auto 4px' }} />
+            <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#ffffff' }}>
+              {stats.songsSung}
+            </div>
+            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Songs Sung</div>
+          </div>
+
+          {/* Cheers Received */}
+          <div
+            style={{
+              padding: '12px 8px',
+              borderRadius: 'var(--radius-md)',
+              background: 'rgba(255, 255, 255, 0.04)',
+              border: '1px solid var(--border-glass)',
+              textAlign: 'center',
+            }}
+          >
+            <Heart size={16} color="var(--neon-pink)" style={{ margin: '0 auto 4px' }} />
+            <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#ffffff' }}>
+              {stats.cheersReceived}
+            </div>
+            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Cheers</div>
+          </div>
+
+          {/* Leaderboard Rank */}
+          <div
+            style={{
+              padding: '12px 8px',
+              borderRadius: 'var(--radius-md)',
+              background: 'rgba(255, 255, 255, 0.04)',
+              border: '1px solid var(--border-glass)',
+              textAlign: 'center',
+            }}
+          >
+            <Award size={16} color="var(--neon-cyan)" style={{ margin: '0 auto 4px' }} />
+            <div style={{ fontSize: '1.3rem', fontWeight: 800, color: stats.rank ? 'var(--neon-cyan)' : 'var(--text-dim)' }}>
+              {stats.rank ? `#${stats.rank}` : '—'}
+            </div>
+            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Room Rank</div>
+          </div>
+        </div>
+      </div>
+
       {/* Your Queued Songs History in this room */}
       <div>
         <h4 style={{ fontFamily: 'var(--font-heading)', fontSize: '1rem', fontWeight: 700, marginBottom: '10px' }}>
-          Your Queued Songs
+          Your Queued Songs ({queuedHistory.length})
         </h4>
 
         {queuedHistory.length === 0 ? (

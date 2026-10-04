@@ -27,9 +27,18 @@ export function getOrCreateRoom(roomCode) {
       history: [],
       subscribers: new Set(),
       guestCount: 0,
+      locked: false,
+      maxPerGuest: 0, // 0 = unlimited
+      hostPin: null, // Host admin PIN
+      singerStats: {}, // { [name]: { songsSung: 0, cheersReceived: 0, lastSong: '' } }
     });
   }
-  return rooms.get(code);
+  const room = rooms.get(code);
+  // Ensure backward compatibility if room object was created prior
+  if (room.locked === undefined) room.locked = false;
+  if (room.maxPerGuest === undefined) room.maxPerGuest = 0;
+  if (!room.singerStats) room.singerStats = {};
+  return room;
 }
 
 export function getRoom(roomCode) {
@@ -67,8 +76,29 @@ export function addSubscriber(roomCode, send) {
   };
 }
 
-export function addSongToQueue(roomCode, song, singerName = 'Guest Singer') {
+export function addSongToQueue(roomCode, song, singerName = 'Guest Singer', options = {}) {
   const room = getOrCreateRoom(roomCode);
+
+  // Check queue lock
+  if (room.locked) {
+    return { error: 'Queue is currently locked by the host.' };
+  }
+
+  const cleanSingerName = (singerName || 'Guest Singer').trim();
+
+  // Check max per guest limit
+  if (room.maxPerGuest > 0) {
+    const userSongCount = room.queue.filter(
+      (q) => (q.singerName || '').toLowerCase() === cleanSingerName.toLowerCase()
+    ).length;
+    if (userSongCount >= room.maxPerGuest) {
+      return { error: `Queue limit reached: max ${room.maxPerGuest} song${room.maxPerGuest > 1 ? 's' : ''} per singer.` };
+    }
+  }
+
+  const mode = options.mode || song.mode || 'solo'; // 'solo' | 'duet' | 'group'
+  const maxSingers = mode === 'duet' ? 2 : mode === 'group' ? 4 : 1;
+  const initialCoSingers = Array.isArray(options.coSingers) ? options.coSingers : [];
 
   const queueItem = {
     queueId: 'q_' + Math.random().toString(36).substring(2, 9),
@@ -77,7 +107,10 @@ export function addSongToQueue(roomCode, song, singerName = 'Guest Singer') {
     artist: song.artist,
     duration: song.duration || '3:30',
     thumbnail: song.thumbnail || `https://img.youtube.com/vi/${song.id}/hqdefault.jpg`,
-    singerName: singerName.trim() || 'Guest Singer',
+    singerName: cleanSingerName,
+    mode,
+    maxSingers,
+    coSingers: initialCoSingers,
     votes: 0,
     voters: [],
     addedAt: Date.now(),
@@ -140,8 +173,12 @@ export function advanceQueue(roomCode) {
   if (!room) return null;
 
   if (room.nowPlaying) {
-    room.history.unshift(room.nowPlaying);
+    const finished = room.nowPlaying;
+    room.history.unshift(finished);
     if (room.history.length > 20) room.history.pop();
+
+    // Record stats for singer and any co-singers
+    recordSingerSongComplete(room, finished);
   }
 
   if (room.queue.length > 0) {
@@ -168,6 +205,11 @@ export function sendCheer(roomCode, effectId, fromName = 'Guest') {
     fromName: (fromName || 'Guest').slice(0, 20),
     at: Date.now(),
   };
+
+  // If a song is currently playing, credit the cheers to the active performers
+  if (room.nowPlaying) {
+    recordSingerCheer(room, room.nowPlaying);
+  }
 
   broadcastRoomEvent(roomCode, 'cheer', cheer);
   return cheer;
@@ -219,6 +261,166 @@ export function removeFromQueue(roomCode, queueId) {
   });
 
   return room.queue;
+}
+
+// Host controls: Clear entire queue
+export function clearQueue(roomCode) {
+  const room = getRoom(roomCode);
+  if (!room) return null;
+
+  room.queue = [];
+
+  broadcastRoomEvent(roomCode, 'queue_updated', {
+    queue: room.queue,
+    nowPlaying: room.nowPlaying,
+  });
+
+  return room.queue;
+}
+
+// Host controls: Lock/Unlock queue
+export function setQueueLocked(roomCode, locked) {
+  const room = getRoom(roomCode);
+  if (!room) return null;
+
+  room.locked = !!locked;
+
+  broadcastRoomEvent(roomCode, 'room_settings_updated', {
+    locked: room.locked,
+    maxPerGuest: room.maxPerGuest,
+  });
+
+  return room.locked;
+}
+
+// Host controls: Set max songs per guest
+export function setMaxPerGuest(roomCode, maxPerGuest) {
+  const room = getRoom(roomCode);
+  if (!room) return null;
+
+  room.maxPerGuest = Math.max(0, parseInt(maxPerGuest, 10) || 0);
+
+  broadcastRoomEvent(roomCode, 'room_settings_updated', {
+    locked: room.locked,
+    maxPerGuest: room.maxPerGuest,
+  });
+
+  return room.maxPerGuest;
+}
+
+// Host controls: Set host PIN
+export function setHostPin(roomCode, pin) {
+  const room = getRoom(roomCode);
+  if (!room) return false;
+  room.hostPin = pin ? String(pin).trim() : null;
+  return true;
+}
+
+// Host controls: Verify host PIN
+export function verifyHostPin(roomCode, pin) {
+  const room = getRoom(roomCode);
+  if (!room) return false;
+  if (!room.hostPin) return true; // No PIN set yet
+  return room.hostPin === String(pin).trim();
+}
+
+// Duet/Group Mode: Join an existing queue item
+export function joinSong(roomCode, queueId, coSingerName) {
+  const room = getRoom(roomCode);
+  if (!room) return { error: 'Room not found.' };
+
+  const item = room.queue.find((q) => q.queueId === queueId);
+  if (!item) return { error: 'Song not found in queue.' };
+
+  if (item.mode !== 'duet' && item.mode !== 'group') {
+    return { error: 'This song is marked as a solo performance.' };
+  }
+
+  if (!item.coSingers) item.coSingers = [];
+
+  const cleanName = (coSingerName || '').trim();
+  if (!cleanName) return { error: 'Singer name is required.' };
+
+  if (cleanName.toLowerCase() === (item.singerName || '').toLowerCase() ||
+      item.coSingers.some((s) => s.toLowerCase() === cleanName.toLowerCase())) {
+    return { error: 'You are already signed up for this song!' };
+  }
+
+  const maxCoSingers = (item.maxSingers || 2) - 1;
+  if (item.coSingers.length >= maxCoSingers) {
+    return { error: 'This song is already full!' };
+  }
+
+  item.coSingers.push(cleanName);
+
+  broadcastRoomEvent(roomCode, 'queue_updated', {
+    queue: room.queue,
+    nowPlaying: room.nowPlaying,
+  });
+
+  return { success: true, item };
+}
+
+// Singer Stats & Leaderboard helpers
+function ensureSingerRecord(room, name) {
+  if (!name) return null;
+  const key = name.trim();
+  if (!key) return null;
+  if (!room.singerStats[key]) {
+    room.singerStats[key] = {
+      singerName: key,
+      songsSung: 0,
+      cheersReceived: 0,
+      lastSong: '',
+    };
+  }
+  return room.singerStats[key];
+}
+
+function recordSingerSongComplete(room, songItem) {
+  if (!room.singerStats) room.singerStats = {};
+  const names = [songItem.singerName, ...(songItem.coSingers || [])].filter(Boolean);
+  for (const n of names) {
+    const rec = ensureSingerRecord(room, n);
+    if (rec) {
+      rec.songsSung += 1;
+      rec.lastSong = songItem.title;
+    }
+  }
+  broadcastRoomEvent(room.code, 'stats_updated', {
+    leaderboard: getSingerLeaderboard(room.code),
+  });
+}
+
+function recordSingerCheer(room, songItem) {
+  if (!room.singerStats) room.singerStats = {};
+  const names = [songItem.singerName, ...(songItem.coSingers || [])].filter(Boolean);
+  for (const n of names) {
+    const rec = ensureSingerRecord(room, n);
+    if (rec) {
+      rec.cheersReceived += 1;
+    }
+  }
+  broadcastRoomEvent(room.code, 'stats_updated', {
+    leaderboard: getSingerLeaderboard(room.code),
+  });
+}
+
+export function getSingerLeaderboard(roomCode) {
+  const room = getRoom(roomCode);
+  if (!room || !room.singerStats) return [];
+
+  const list = Object.values(room.singerStats).map((s) => ({
+    singerName: s.singerName,
+    songsSung: s.songsSung,
+    cheersReceived: s.cheersReceived,
+    // Score formula: (songs sung * 100) + (cheers received * 10)
+    score: (s.songsSung * 100) + (s.cheersReceived * 10),
+    lastSong: s.lastSong,
+  }));
+
+  list.sort((a, b) => b.score - a.score || b.songsSung - a.songsSung);
+  return list;
 }
 
 // Helper: sort queue descending by votes, then ascending by addedAt timestamp

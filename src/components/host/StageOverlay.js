@@ -94,8 +94,28 @@ export default function StageOverlay({ song, roomCode, guestCount = 1, nextSong 
         >
           <span className="badge-singer">
             <Mic size={12} />
-            <span>{song?.singerName || 'Guest'}</span>
+            <span>{[song?.singerName, ...(song?.coSingers || [])].filter(Boolean).join(' & ') || 'Guest'}</span>
           </span>
+          {song?.mode && song?.mode !== 'solo' && (
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '2px 9px',
+                borderRadius: 'var(--radius-full)',
+                background: 'rgba(6, 182, 212, 0.25)',
+                border: '1px solid var(--neon-cyan)',
+                color: 'var(--neon-cyan)',
+                fontSize: '0.75rem',
+                fontWeight: 800,
+                letterSpacing: '0.04em',
+              }}
+            >
+              <Users size={11} />
+              <span>{song?.mode === 'duet' ? 'DUET' : 'GROUP'}</span>
+            </span>
+          )}
           {song?.artist && (
             <span style={{ fontSize: '0.88rem', color: 'var(--text-muted)' }}>{song.artist}</span>
           )}

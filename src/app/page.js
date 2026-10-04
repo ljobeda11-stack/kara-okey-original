@@ -7,8 +7,11 @@ import VideoPlayer from '@/components/host/VideoPlayer';
 import StageOverlay from '@/components/host/StageOverlay';
 import IdleScreen from '@/components/host/IdleScreen';
 import CelebrationOverlay, { randomPraise } from '@/components/host/CelebrationOverlay';
+import SongTransition from '@/components/host/SongTransition';
+import HostControlsPanel from '@/components/host/HostControlsPanel';
 import useAutoFullscreen from '@/hooks/useAutoFullscreen';
 import { unlockAudio } from '@/lib/sounds';
+import { Settings } from 'lucide-react';
 
 export default function HostPage() {
   const [roomCode, setRoomCode] = useState('');
@@ -18,13 +21,22 @@ export default function HostPage() {
   const [toastMessage, setToastMessage] = useState('');
   const [celebration, setCelebration] = useState(null);
   const [cheers, setCheers] = useState([]);
+  const [leaderboard, setLeaderboard] = useState([]);
+  const [transitionSong, setTransitionSong] = useState(null);
+  const [isHostControlsOpen, setIsHostControlsOpen] = useState(false);
+
   const nowPlayingRef = useRef(null);
+  const queueRef = useRef([]);
   const celebrationTimerRef = useRef(null);
 
-  // Keep a ref of the current song so skip/auto-advance can celebrate it
+  // Keep refs of current song and queue
   useEffect(() => {
     nowPlayingRef.current = nowPlaying;
   }, [nowPlaying]);
+
+  useEffect(() => {
+    queueRef.current = queue;
+  }, [queue]);
 
   useEffect(() => {
     return () => clearTimeout(celebrationTimerRef.current);
@@ -35,9 +47,7 @@ export default function HostPage() {
     unlockAudio();
   }, []);
 
-  // Auto fullscreen while a song is on the stage: entered by itself the
-  // moment playback starts, re-asserted on every interaction, and re-entered
-  // if anything drops out of fullscreen — so the overlay + join QR stay up.
+  // Auto fullscreen while a song is on the stage
   const isStageLive = !!nowPlaying;
   const goFullscreen = useAutoFullscreen(isStageLive);
 
@@ -58,9 +68,7 @@ export default function HostPage() {
     setCheers((prev) => prev.filter((c) => c.id !== cheerId));
   }, []);
 
-  // Post-song celebration (host skip, natural end, OR a guest skip from
-  // their phone). Deduped by song id so the host + SSE paths never
-  // celebrate the same finished song twice.
+  // Post-song celebration
   const celebratedRef = useRef(new Set());
   const celebrateSong = useCallback((song) => {
     if (!song) return;
@@ -70,15 +78,31 @@ export default function HostPage() {
       if (celebratedRef.current.size > 200) celebratedRef.current.clear();
       celebratedRef.current.add(id);
     }
+
+    const coSingers = Array.isArray(song.coSingers) ? song.coSingers : [];
+    const allSingers = [song.singerName, ...coSingers].filter(Boolean).join(' & ');
+
+    // Calculate rank text from leaderboard if available
+    let rankText = null;
+    const cleanSinger = (song.singerName || '').trim().toLowerCase();
+    const stat = (leaderboard || []).find(
+      (s) => (s.singerName || '').trim().toLowerCase() === cleanSinger
+    );
+    if (stat) {
+      const rank = leaderboard.indexOf(stat) + 1;
+      rankText = `🏆 Rank #${rank} tonight! (${stat.songsSung} song${stat.songsSung > 1 ? 's' : ''})`;
+    }
+
     setCelebration({
       key: Date.now(),
       text: randomPraise(),
       title: song.title,
-      singer: song.singerName || 'Guest',
+      singer: allSingers || 'Guest',
+      rankText,
     });
     clearTimeout(celebrationTimerRef.current);
     celebrationTimerRef.current = setTimeout(() => setCelebration(null), 4200);
-  }, []);
+  }, [leaderboard]);
 
   // 1. Initialize or load room
   useEffect(() => {
@@ -95,9 +119,9 @@ export default function HostPage() {
             setNowPlaying(data.room.nowPlaying);
             setQueue(data.room.queue || []);
             setGuestCount(data.room.guestCount || 1);
+            loadLeaderboard(savedCode);
             return;
           }
-          // Saved code is stale — drop it so we create a fresh room below
           localStorage.removeItem('karaokey_host_room');
         }
 
@@ -109,6 +133,7 @@ export default function HostPage() {
         if (createData.success) {
           setRoomCode(createData.code);
           localStorage.setItem('karaokey_host_room', createData.code);
+          loadLeaderboard(createData.code);
         } else {
           setToastMessage(createData.error || 'Could not create a room. Retrying…');
         }
@@ -118,6 +143,16 @@ export default function HostPage() {
           setToastMessage('Connection error — is the server running?');
         }
       }
+    }
+
+    async function loadLeaderboard(code) {
+      try {
+        const res = await fetch(`/api/room/${code}/stats`);
+        const data = await res.json();
+        if (!cancelled && data.success && Array.isArray(data.leaderboard)) {
+          setLeaderboard(data.leaderboard);
+        }
+      } catch (e) {}
     }
 
     initRoom();
@@ -153,8 +188,6 @@ export default function HostPage() {
           const payload = JSON.parse(e.data);
           const nextSong = payload.data.nowPlaying;
           const prevSong = nowPlayingRef.current;
-          // Song changed to a different track → celebrate the one that
-          // just finished (covers guest-initiated skips too).
           if (
             prevSong &&
             nextSong &&
@@ -177,6 +210,15 @@ export default function HostPage() {
         } catch (err) {}
       });
 
+      eventSource.addEventListener('stats_updated', (e) => {
+        try {
+          const payload = JSON.parse(e.data);
+          if (payload.data?.leaderboard) {
+            setLeaderboard(payload.data.leaderboard);
+          }
+        } catch (err) {}
+      });
+
       eventSource.addEventListener('guest_count', (e) => {
         try {
           const payload = JSON.parse(e.data);
@@ -188,7 +230,6 @@ export default function HostPage() {
         try {
           eventSource.close();
         } catch (e) {}
-        // Reconnect after 3s
         clearTimeout(reconnectTimer);
         reconnectTimer = setTimeout(connectSSE, 3000);
       };
@@ -208,7 +249,7 @@ export default function HostPage() {
   }, [roomCode, celebrateSong]);
 
   // 3. Skip to next song — with post-song celebration for the finished track
-  const handleSkip = useCallback(
+  const executeSkip = useCallback(
     async (opts = {}) => {
       if (!roomCode) return;
       const finished = nowPlayingRef.current;
@@ -218,7 +259,6 @@ export default function HostPage() {
         if (data.success) {
           setNowPlaying(data.nowPlaying);
           setQueue(data.queue || []);
-          // Celebrate the song that just ended (natural end or manual skip)
           celebrateSong(finished);
           if (data.nowPlaying && !opts.silent) {
             setToastMessage(`Now playing: ${data.nowPlaying.title}`);
@@ -231,19 +271,53 @@ export default function HostPage() {
     [roomCode, celebrateSong]
   );
 
+  // Trigger song transition countdown before starting the next song
+  const handleNaturalSongEnd = useCallback(() => {
+    const nextInQueue = queueRef.current[0];
+    if (nextInQueue) {
+      setTransitionSong(nextInQueue);
+    } else {
+      executeSkip({ silent: true });
+    }
+  }, [executeSkip]);
+
+  const handleTransitionComplete = useCallback(() => {
+    setTransitionSong(null);
+    executeSkip({ silent: true });
+  }, [executeSkip]);
+
+  // Refresh queue helper for HostControlsPanel
+  const handleRefreshRoom = useCallback(async () => {
+    if (!roomCode) return;
+    try {
+      const res = await fetch(`/api/room/${roomCode}`);
+      const data = await res.json();
+      if (data.success && data.room) {
+        setQueue(data.room.queue || []);
+        setNowPlaying(data.room.nowPlaying);
+      }
+    } catch (e) {}
+  }, [roomCode]);
+
   // ===== TV STAGE =====
-  // While a song is playing the main screen becomes a full screen YouTube
-  // karaoke stage with a neon overlay (music animation + join QR code).
-  // Nothing has to be tapped here — every control lives on the guest phone.
   if (nowPlaying) {
     return (
       <main className="tv-theater-root">
+        {/* Animated Countdown Transition between songs */}
+        {transitionSong && (
+          <SongTransition
+            nextSong={transitionSong}
+            onComplete={handleTransitionComplete}
+            durationSeconds={5}
+          />
+        )}
+
         <VideoPlayer
           key={nowPlaying.queueId || nowPlaying.id}
           song={nowPlaying}
           fill
-          onSongEnd={() => handleSkip({ silent: true })}
-          onSkip={() => handleSkip()}
+          onSongEnd={handleNaturalSongEnd}
+          onSkip={() => executeSkip()}
         />
 
         <StageOverlay
@@ -260,13 +334,50 @@ export default function HostPage() {
         />
 
         <Toast message={toastMessage} onClose={() => setToastMessage('')} />
+
+        {/* Subtle Host Controls Trigger Gear in bottom right */}
+        <button
+          onClick={() => setIsHostControlsOpen(true)}
+          style={{
+            position: 'fixed',
+            bottom: '16px',
+            right: '16px',
+            zIndex: 65,
+            background: 'rgba(8, 8, 20, 0.65)',
+            backdropFilter: 'blur(10px)',
+            WebkitBackdropFilter: 'blur(10px)',
+            border: '1px solid var(--border-glass)',
+            borderRadius: '50%',
+            width: '38px',
+            height: '38px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--text-muted)',
+            cursor: 'pointer',
+            opacity: 0.45,
+            transition: 'opacity 0.2s',
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
+          onMouseLeave={(e) => (e.currentTarget.style.opacity = '0.45')}
+          title="Host Admin Controls"
+        >
+          <Settings size={18} />
+        </button>
+
+        <HostControlsPanel
+          isOpen={isHostControlsOpen}
+          onClose={() => setIsHostControlsOpen(false)}
+          roomCode={roomCode}
+          queue={queue}
+          guestCount={guestCount}
+          onRefreshQueue={handleRefreshRoom}
+        />
       </main>
     );
   }
 
   // ===== ENTRY SCREEN =====
-  // App name + logo beside one big QR code + how-it-works. Locked to the
-  // viewport height so a 16:9 TV shows everything with no scrolling.
   return (
     <main
       style={{
@@ -302,9 +413,21 @@ export default function HostPage() {
           justifyContent: 'center',
         }}
       >
-        <IdleScreen roomCode={roomCode} />
+        <IdleScreen
+          roomCode={roomCode}
+          onOpenHostControls={() => setIsHostControlsOpen(true)}
+          leaderboard={leaderboard}
+        />
       </div>
+
+      <HostControlsPanel
+        isOpen={isHostControlsOpen}
+        onClose={() => setIsHostControlsOpen(false)}
+        roomCode={roomCode}
+        queue={queue}
+        guestCount={guestCount}
+        onRefreshQueue={handleRefreshRoom}
+      />
     </main>
   );
 }
-

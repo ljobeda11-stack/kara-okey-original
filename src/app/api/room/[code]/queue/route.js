@@ -13,6 +13,8 @@ export async function GET(request, { params }) {
     success: true,
     nowPlaying: room.nowPlaying,
     queue: room.queue,
+    locked: room.locked,
+    maxPerGuest: room.maxPerGuest,
   });
 }
 
@@ -20,7 +22,7 @@ export async function POST(request, { params }) {
   const code = params.code?.toUpperCase();
   try {
     const body = await request.json();
-    const { song, singerName } = body;
+    const { song, singerName, mode, coSingers } = body;
 
     if (!song || !song.id || !song.title) {
       return NextResponse.json(
@@ -29,7 +31,17 @@ export async function POST(request, { params }) {
       );
     }
 
-    const result = addSongToQueue(code, song, singerName);
+    const result = addSongToQueue(code, song, singerName, {
+      mode: mode || song.mode,
+      coSingers: coSingers || song.coSingers,
+    });
+
+    if (result.error) {
+      return NextResponse.json(
+        { success: false, error: result.error },
+        { status: 400 }
+      );
+    }
 
     return NextResponse.json({
       success: true,
@@ -45,11 +57,18 @@ export async function POST(request, { params }) {
 export async function DELETE(request, { params }) {
   const code = params.code?.toUpperCase();
   const { searchParams } = new URL(request.url);
-  const queueId = searchParams.get('queueId');
+  let queueId = searchParams.get('queueId');
+
+  if (!queueId) {
+    try {
+      const body = await request.json();
+      queueId = body.queueId;
+    } catch (e) {}
+  }
 
   if (!queueId) {
     return NextResponse.json(
-      { success: false, error: 'queueId query parameter is required.' },
+      { success: false, error: 'queueId parameter is required.' },
       { status: 400 }
     );
   }

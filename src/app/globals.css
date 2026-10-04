@@ -388,3 +388,22 @@ html:-webkit-full-screen body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--neon-purple);
 }
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes marquee {
+  0% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+

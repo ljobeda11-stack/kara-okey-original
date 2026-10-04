@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import confetti from 'canvas-confetti';
 import GuestHeader from '@/components/guest/GuestHeader';
 import BottomNav from '@/components/guest/BottomNav';
@@ -9,6 +9,8 @@ import QueueTab from '@/components/guest/QueueTab';
 import FavoritesTab from '@/components/guest/FavoritesTab';
 import ProfileTab from '@/components/guest/ProfileTab';
 import CheerPanel from '@/components/guest/CheerPanel';
+import NowPlayingBar from '@/components/guest/NowPlayingBar';
+import UpNextAlert from '@/components/guest/UpNextAlert';
 import Toast from '@/components/shared/Toast';
 import ParticleBackground from '@/components/shared/ParticleBackground';
 import { Sparkles, AlertTriangle, ArrowLeft } from 'lucide-react';
@@ -27,6 +29,8 @@ export default function GuestPage({ params }) {
   const [toastMessage, setToastMessage] = useState('');
   const [roomError, setRoomError] = useState(null);
   const [voterId, setVoterId] = useState('');
+  const [upNextSong, setUpNextSong] = useState(null);
+  const alertedRef = useRef(new Set());
 
   // 1. Initialize guest identity and load room state
   useEffect(() => {
@@ -127,6 +131,22 @@ export default function GuestPage({ params }) {
     };
   }, [roomCode, roomError]);
 
+  // Check if current user is #1 in queue ("You're Up Next!" alert)
+  useEffect(() => {
+    if (!queue || queue.length === 0 || !singerName) return;
+    const firstSong = queue[0];
+    const cleanCurrent = singerName.trim().toLowerCase();
+    const isOwner = (firstSong.singerName || '').trim().toLowerCase() === cleanCurrent;
+    const isCoSinger = (firstSong.coSingers || []).some(
+      (s) => s.trim().toLowerCase() === cleanCurrent
+    );
+
+    if ((isOwner || isCoSinger) && firstSong.queueId && !alertedRef.current.has(firstSong.queueId)) {
+      alertedRef.current.add(firstSong.queueId);
+      setUpNextSong(firstSong);
+    }
+  }, [queue, singerName]);
+
   // 3. Queue a song
   const handleQueueSong = useCallback(
     async (song) => {
@@ -137,6 +157,8 @@ export default function GuestPage({ params }) {
           body: JSON.stringify({
             song,
             singerName,
+            mode: song.mode || 'solo',
+            coSingers: song.coSingers || [],
           }),
         });
 
@@ -152,7 +174,8 @@ export default function GuestPage({ params }) {
             });
           } catch (e) {}
 
-          setToastMessage(`🎤 "${song.title}" added to queue!`);
+          const modeText = song.mode === 'duet' ? ' (Duet)' : song.mode === 'group' ? ' (Group)' : '';
+          setToastMessage(`🎤 "${song.title}"${modeText} added to queue!`);
           setQueuedHistory((prev) => [song, ...prev]);
         } else {
           setToastMessage(data.error || 'Failed to add song. Try again.');
@@ -195,6 +218,60 @@ export default function GuestPage({ params }) {
       }
     },
     [roomCode, voterId]
+  );
+
+  // Guest removes own song from queue
+  const handleRemoveSong = useCallback(
+    async (queueId, title) => {
+      setQueue((prev) => prev.filter((q) => q.queueId !== queueId));
+      try {
+        const res = await fetch(`/api/room/${roomCode}/queue?queueId=${encodeURIComponent(queueId)}`, {
+          method: 'DELETE',
+        });
+        const data = await res.json();
+        if (data.success) {
+          setToastMessage(`Removed "${title}" from queue.`);
+        } else {
+          setToastMessage(data.error || 'Could not remove song.');
+        }
+      } catch (err) {
+        setToastMessage('Failed to remove song.');
+      }
+    },
+    [roomCode]
+  );
+
+  // Guest joins an open Duet or Group song
+  const handleJoinSong = useCallback(
+    async (queueId) => {
+      try {
+        const res = await fetch(`/api/room/${roomCode}/join-song`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            queueId,
+            singerName,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          try {
+            confetti({
+              particleCount: 40,
+              spread: 50,
+              origin: { y: 0.7 },
+              colors: ['#06b6d4', '#ec4899', '#a855f7'],
+            });
+          } catch (e) {}
+          setToastMessage('You joined the performance! 🎤');
+        } else {
+          setToastMessage(data.error || 'Could not join song.');
+        }
+      } catch (err) {
+        setToastMessage('Could not join song. Try again.');
+      }
+    },
+    [roomCode, singerName]
   );
 
   // Guest can skip to next song from their phone
@@ -322,7 +399,7 @@ export default function GuestPage({ params }) {
         minHeight: '100vh',
         display: 'flex',
         flexDirection: 'column',
-        paddingBottom: '80px', // Space for bottom nav
+        paddingBottom: nowPlaying ? '140px' : '80px', // Extra room when NowPlayingBar is visible
         maxWidth: '600px',
         margin: '0 auto',
       }}
@@ -330,6 +407,9 @@ export default function GuestPage({ params }) {
       <ParticleBackground />
 
       <Toast message={toastMessage} onClose={() => setToastMessage('')} />
+
+      {/* Up Next Alert Notification */}
+      <UpNextAlert song={upNextSong} onClose={() => setUpNextSong(null)} />
 
       {/* Header */}
       <GuestHeader
@@ -357,6 +437,9 @@ export default function GuestPage({ params }) {
               votedQueueIds={votedQueueIds}
               onReorder={handleReorder}
               onSkip={handleGuestSkip}
+              onRemoveSong={handleRemoveSong}
+              currentSingerName={singerName}
+              onJoinSong={handleJoinSong}
             />
             <div style={{ marginTop: '16px' }}>
               <CheerPanel roomCode={roomCode} singerName={singerName} compact />
@@ -381,9 +464,19 @@ export default function GuestPage({ params }) {
             singerName={singerName}
             onSaveSingerName={handleSaveSingerName}
             queuedHistory={queuedHistory}
+            roomCode={roomCode}
           />
         )}
       </div>
+
+      {/* Persistent Mini "Now Playing" Bar pinned above BottomNav */}
+      <NowPlayingBar
+        nowPlaying={nowPlaying}
+        onSkip={handleGuestSkip}
+        roomCode={roomCode}
+        singerName={singerName}
+        onOpenQueue={() => setActiveTab('queue')}
+      />
 
       {/* Mobile Sticky Bottom Nav */}
       <BottomNav

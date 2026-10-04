@@ -1,7 +1,17 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { ThumbsUp, Mic, Disc3, Music2, GripVertical, SkipForward } from 'lucide-react';
+import {
+  ThumbsUp,
+  Mic,
+  Disc3,
+  Music2,
+  GripVertical,
+  SkipForward,
+  Trash2,
+  UserPlus,
+  Users,
+} from 'lucide-react';
 
 export default function QueueTab({
   queue = [],
@@ -10,6 +20,9 @@ export default function QueueTab({
   votedQueueIds = new Set(),
   onReorder,
   onSkip,
+  onRemoveSong,
+  currentSingerName = '',
+  onJoinSong,
 }) {
   const [dragIndex, setDragIndex] = useState(null);
   const [dragOverIndex, setDragOverIndex] = useState(null);
@@ -79,6 +92,8 @@ export default function QueueTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dragIndex, dragOverIndex]);
 
+  const cleanCurrentSinger = (currentSingerName || '').trim().toLowerCase();
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       {/* Currently Playing on Main Stage */}
@@ -136,11 +151,32 @@ export default function QueueTab({
               <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginTop: '2px' }}>
                 {nowPlaying.artist}
               </p>
-              <div style={{ marginTop: '6px' }}>
+              <div style={{ marginTop: '6px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                 <span className="badge-singer">
                   <Mic size={11} />
-                  <span>Singing: {nowPlaying.singerName || 'Guest'}</span>
+                  <span>
+                    Singing: {[nowPlaying.singerName, ...(nowPlaying.coSingers || [])].filter(Boolean).join(' & ')}
+                  </span>
                 </span>
+                {nowPlaying.mode && nowPlaying.mode !== 'solo' && (
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      padding: '2px 8px',
+                      borderRadius: 'var(--radius-full)',
+                      background: 'rgba(6, 182, 212, 0.2)',
+                      border: '1px solid var(--neon-cyan)',
+                      color: 'var(--neon-cyan)',
+                      fontSize: '0.68rem',
+                      fontWeight: 700,
+                    }}
+                  >
+                    <Users size={10} />
+                    <span>{nowPlaying.mode === 'duet' ? 'Duet' : 'Group'}</span>
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -223,19 +259,30 @@ export default function QueueTab({
               const isDragging = dragIndex === index;
               const isOver = dragOverIndex === index && dragIndex !== null && dragIndex !== index;
 
+              const isOwner =
+                cleanCurrentSinger &&
+                (item.singerName || '').toLowerCase() === cleanCurrentSinger;
+
+              const coSingers = Array.isArray(item.coSingers) ? item.coSingers : [];
+              const isDuetOrGroup = item.mode === 'duet' || item.mode === 'group';
+              const maxAllowed = item.maxSingers || (item.mode === 'duet' ? 2 : 4);
+              const currentTotalSingers = 1 + coSingers.length;
+              const hasOpenSpots = isDuetOrGroup && currentTotalSingers < maxAllowed;
+
+              const alreadyJoined =
+                isOwner ||
+                coSingers.some((s) => s.toLowerCase() === cleanCurrentSinger);
+
               return (
                 <div
                   key={item.queueId || index}
                   className="glass-card"
                   draggable={false}
                   onTouchMove={(e) => {
-                    // Only start tracking once the long-press has armed drag;
-                    // otherwise a normal scroll gesture aborts the hold.
                     if (dragIndex === null) {
                       cancelTouchHold();
                       return;
                     }
-                    // Find which row the finger is over
                     const touch = e.touches[0];
                     const el = document.elementFromPoint(touch.clientX, touch.clientY);
                     const row = el?.closest?.('[data-queue-row]');
@@ -291,6 +338,7 @@ export default function QueueTab({
                   >
                     <GripVertical size={18} />
                   </span>
+
                   {/* Position */}
                   <span
                     style={{
@@ -337,6 +385,7 @@ export default function QueueTab({
                       style={{
                         display: 'flex',
                         alignItems: 'center',
+                        flexWrap: 'wrap',
                         gap: '6px',
                         fontSize: '0.75rem',
                         color: 'var(--text-muted)',
@@ -344,41 +393,120 @@ export default function QueueTab({
                       }}
                     >
                       <span style={{ color: 'var(--neon-purple)', fontWeight: 600 }}>
-                        🎤 {item.singerName || 'Guest'}
+                        🎤 {[item.singerName, ...coSingers].filter(Boolean).join(' & ')}
                       </span>
                       <span>•</span>
                       <span>{item.duration}</span>
+
+                      {/* Mode Badge */}
+                      {isDuetOrGroup && (
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px',
+                            padding: '1px 6px',
+                            borderRadius: 'var(--radius-full)',
+                            background: 'rgba(6, 182, 212, 0.15)',
+                            border: '1px solid rgba(6, 182, 212, 0.4)',
+                            color: 'var(--neon-cyan)',
+                            fontSize: '0.65rem',
+                            fontWeight: 700,
+                          }}
+                        >
+                          <Users size={9} />
+                          <span>
+                            {item.mode === 'duet' ? 'Duet' : 'Group'} ({currentTotalSingers}/{maxAllowed})
+                          </span>
+                        </span>
+                      )}
                     </div>
+
+                    {/* Join Duet / Group Button */}
+                    {hasOpenSpots && !alreadyJoined && onJoinSong && (
+                      <div style={{ marginTop: '6px' }}>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onJoinSong(item.queueId);
+                          }}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            padding: '3px 10px',
+                            borderRadius: 'var(--radius-full)',
+                            background: 'rgba(6, 182, 212, 0.2)',
+                            border: '1px solid var(--neon-cyan)',
+                            color: 'var(--neon-cyan)',
+                            fontSize: '0.72rem',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            boxShadow: '0 0 10px rgba(6, 182, 212, 0.2)',
+                          }}
+                        >
+                          <UserPlus size={11} />
+                          <span>Join {item.mode === 'duet' ? 'Duet' : 'Group'}!</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
 
-                  {/* Upvote Button */}
-                  <button
-                    onClick={() => onVoteSong(item.queueId)}
-                    style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      padding: '8px 12px',
-                      borderRadius: 'var(--radius-sm)',
-                      background: hasVoted
-                        ? 'rgba(245, 158, 11, 0.25)'
-                        : 'rgba(255, 255, 255, 0.05)',
-                      border: `1px solid ${
-                        hasVoted ? 'var(--neon-amber)' : 'var(--border-glass)'
-                      }`,
-                      color: hasVoted ? 'var(--neon-amber)' : 'var(--text-muted)',
-                      cursor: 'pointer',
-                      transition: 'all 0.2s ease',
-                      flexShrink: 0,
-                    }}
-                    title="Upvote to bump up queue"
-                  >
-                    <ThumbsUp size={16} fill={hasVoted ? 'var(--neon-amber)' : 'none'} />
-                    <span style={{ fontSize: '0.75rem', fontWeight: 800, marginTop: '2px' }}>
-                      {item.votes || 0}
-                    </span>
-                  </button>
+                  {/* Right Action Buttons */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                    {/* Delete button for user's own queued songs */}
+                    {isOwner && onRemoveSong && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onRemoveSong(item.queueId, item.title);
+                        }}
+                        style={{
+                          background: 'rgba(239, 68, 68, 0.12)',
+                          border: '1px solid rgba(239, 68, 68, 0.3)',
+                          color: '#f87171',
+                          padding: '8px',
+                          borderRadius: 'var(--radius-sm)',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          transition: 'all 0.2s',
+                        }}
+                        title="Remove your song from queue"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    )}
+
+                    {/* Upvote Button */}
+                    <button
+                      onClick={() => onVoteSong(item.queueId)}
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: '8px 12px',
+                        borderRadius: 'var(--radius-sm)',
+                        background: hasVoted
+                          ? 'rgba(245, 158, 11, 0.25)'
+                          : 'rgba(255, 255, 255, 0.05)',
+                        border: `1px solid ${
+                          hasVoted ? 'var(--neon-amber)' : 'var(--border-glass)'
+                        }`,
+                        color: hasVoted ? 'var(--neon-amber)' : 'var(--text-muted)',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease',
+                      }}
+                      title="Upvote to bump up queue"
+                    >
+                      <ThumbsUp size={16} fill={hasVoted ? 'var(--neon-amber)' : 'none'} />
+                      <span style={{ fontSize: '0.75rem', fontWeight: 800, marginTop: '2px' }}>
+                        {item.votes || 0}
+                      </span>
+                    </button>
+                  </div>
                 </div>
               );
             })}

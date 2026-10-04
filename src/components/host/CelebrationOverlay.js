@@ -133,6 +133,27 @@ export default function CelebrationOverlay({ celebration, cheers = [], onCheerSh
           <div style={{ fontSize: '0.95rem', color: 'var(--text-muted)', marginTop: '6px' }}>
             🎤 {celebration.singer} just rocked “{celebration.title}”
           </div>
+          {celebration.rankText && (
+            <div
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                marginTop: '8px',
+                padding: '4px 16px',
+                borderRadius: 'var(--radius-full)',
+                background: 'rgba(245, 158, 11, 0.25)',
+                border: '1px solid var(--neon-amber)',
+                color: 'var(--neon-amber)',
+                fontSize: '0.9rem',
+                fontWeight: 800,
+                letterSpacing: '0.04em',
+                boxShadow: '0 0 15px rgba(245, 158, 11, 0.4)',
+              }}
+            >
+              <span>{celebration.rankText}</span>
+            </div>
+          )}
         </div>
       )}
 
