@@ -23,21 +23,24 @@ export async function GET(request) {
   if (process.env.BLOB_READ_WRITE_TOKEN) {
     try {
       const { put, get } = await import('@vercel/blob');
-      const putRes = await put(`karaokey-rooms/${code}.json`, JSON.stringify({ test: 123, time: Date.now() }), {
-        access: 'public',
-        addRandomSuffix: false,
-        allowOverwrite: true,
-        cacheControlMaxAge: 0,
-      });
-      debug.putUrl = putRes.url;
-
-      const getRes = await get(`karaokey-rooms/${code}.json`, {
-        access: 'public',
-        useCache: false,
-      });
-      if (getRes && getRes.stream) {
-        const text = await new Response(getRes.stream).text();
-        blobResult = JSON.parse(text);
+      // Test private put & get
+      try {
+        const putPriv = await put(`rooms-priv/${code}.json`, JSON.stringify({ priv: true, time: Date.now() }), {
+          access: 'private',
+          addRandomSuffix: false,
+          allowOverwrite: true,
+        });
+        debug.putPrivUrl = putPriv.url;
+        const getPriv = await get(`rooms-priv/${code}.json`, {
+          access: 'private',
+          useCache: false,
+        });
+        if (getPriv && getPriv.stream) {
+          const text = await new Response(getPriv.stream).text();
+          debug.privResult = JSON.parse(text);
+        }
+      } catch (errPriv) {
+        debug.privError = { message: errPriv.message, stack: errPriv.stack };
       }
     } catch (e) {
       blobPutError = { message: e.message, stack: e.stack, name: e.name };
