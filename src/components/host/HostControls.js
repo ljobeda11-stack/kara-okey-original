@@ -2,7 +2,7 @@
 
 import { SkipForward, PlusCircle, Maximize2, Users, RefreshCw } from 'lucide-react';
 
-export default function HostControls({ onSkip, onAddDemo, guestCount = 1, roomCode }) {
+export default function HostControls({ onSkip, onAddDemo, guestCount = 1, roomCode, onOpenHostControls }) {
   return (
     <div
       style={{

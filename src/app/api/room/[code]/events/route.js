@@ -1,12 +1,13 @@
 import { NextResponse } from 'next/server';
-import { addSubscriber, getRoom, resolveRoomCode } from '@/lib/store';
+import { addSubscriber, getRoom, resolveRoomCode, hydrateRoom } from '@/lib/store';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request, { params }) {
   const code = await resolveRoomCode(request, params);
+  const room = await hydrateRoom(code);
 
-  if (!code || !getRoom(code)) {
+  if (!code || !room) {
     return NextResponse.json({ success: false, error: 'Room not found.' }, { status: 404 });
   }
 

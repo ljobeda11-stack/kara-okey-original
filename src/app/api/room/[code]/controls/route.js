@@ -8,13 +8,15 @@ import {
   verifyHostPin,
   removeFromQueue,
   resolveRoomCode,
+  hydrateRoom,
+  syncRoomToCloud,
 } from '@/lib/store';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request, { params }) {
   const code = await resolveRoomCode(request, params);
-  const room = getRoom(code);
+  const room = await hydrateRoom(code);
 
   if (!room) {
     return NextResponse.json({ success: false, error: 'Room not found.' }, { status: 404 });
@@ -32,7 +34,7 @@ export async function GET(request, { params }) {
 
 export async function POST(request, { params }) {
   const code = await resolveRoomCode(request, params);
-  const room = getRoom(code);
+  const room = await hydrateRoom(code);
 
   if (!room) {
     return NextResponse.json({ success: false, error: 'Room not found.' }, { status: 404 });
@@ -59,21 +61,25 @@ export async function POST(request, { params }) {
 
     if (action === 'set_pin') {
       setHostPin(code, body.newPin);
+      await syncRoomToCloud(code);
       return NextResponse.json({ success: true, hasPin: !!body.newPin });
     }
 
     if (action === 'clear_queue') {
       clearQueue(code);
+      await syncRoomToCloud(code);
       return NextResponse.json({ success: true, message: 'Queue cleared.' });
     }
 
     if (action === 'toggle_lock') {
       const locked = setQueueLocked(code, body.locked !== undefined ? body.locked : !room.locked);
+      await syncRoomToCloud(code);
       return NextResponse.json({ success: true, locked });
     }
 
     if (action === 'set_max_per_guest') {
       const maxPerGuest = setMaxPerGuest(code, body.maxPerGuest);
+      await syncRoomToCloud(code);
       return NextResponse.json({ success: true, maxPerGuest });
     }
 
@@ -82,6 +88,7 @@ export async function POST(request, { params }) {
         return NextResponse.json({ success: false, error: 'queueId is required.' }, { status: 400 });
       }
       removeFromQueue(code, body.queueId);
+      await syncRoomToCloud(code);
       return NextResponse.json({ success: true, message: 'Song removed from queue.' });
     }
 

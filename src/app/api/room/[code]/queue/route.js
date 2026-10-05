@@ -1,11 +1,19 @@
 import { NextResponse } from 'next/server';
-import { getOrCreateRoom, getRoom, addSongToQueue, removeFromQueue, resolveRoomCode } from '@/lib/store';
+import {
+  getOrCreateRoom,
+  getRoom,
+  addSongToQueue,
+  removeFromQueue,
+  resolveRoomCode,
+  hydrateRoom,
+  syncRoomToCloud,
+} from '@/lib/store';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request, { params }) {
   const code = await resolveRoomCode(request, params);
-  const room = getRoom(code);
+  const room = await hydrateRoom(code);
 
   if (!room) {
     return NextResponse.json({ success: false, error: 'Room not found.' }, { status: 404 });
@@ -33,6 +41,7 @@ export async function POST(request, { params }) {
       );
     }
 
+    await hydrateRoom(code);
     const result = addSongToQueue(code, song, singerName, {
       mode: mode || song.mode,
       coSingers: coSingers || song.coSingers,
@@ -44,6 +53,8 @@ export async function POST(request, { params }) {
         { status: 400 }
       );
     }
+
+    await syncRoomToCloud(code);
 
     return NextResponse.json({
       success: true,
@@ -75,9 +86,12 @@ export async function DELETE(request, { params }) {
     );
   }
 
+  await hydrateRoom(code);
   const updatedQueue = removeFromQueue(code, queueId);
   if (updatedQueue === null) {
     return NextResponse.json({ success: false, error: 'Room not found.' }, { status: 404 });
   }
+
+  await syncRoomToCloud(code);
   return NextResponse.json({ success: true, queue: updatedQueue });
 }

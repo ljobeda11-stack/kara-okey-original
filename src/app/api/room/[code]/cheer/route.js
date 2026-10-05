@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { sendCheer, resolveRoomCode } from '@/lib/store';
+import { sendCheer, resolveRoomCode, hydrateRoom, syncRoomToCloud } from '@/lib/store';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,10 +16,13 @@ export async function POST(request, { params }) {
       );
     }
 
+    await hydrateRoom(code);
     const cheer = sendCheer(code, String(effectId).slice(0, 24), fromName);
     if (!cheer) {
       return NextResponse.json({ success: false, error: 'Room not found.' }, { status: 404 });
     }
+
+    await syncRoomToCloud(code);
 
     return NextResponse.json({ success: true, cheer });
   } catch (err) {

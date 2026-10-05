@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { reorderQueue, resolveRoomCode } from '@/lib/store';
+import { reorderQueue, resolveRoomCode, hydrateRoom, syncRoomToCloud } from '@/lib/store';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,11 +16,13 @@ export async function PATCH(request, { params }) {
       );
     }
 
+    await hydrateRoom(code);
     const queue = reorderQueue(code, orderedQueueIds);
     if (queue === null) {
       return NextResponse.json({ success: false, error: 'Room not found.' }, { status: 404 });
     }
 
+    await syncRoomToCloud(code);
     return NextResponse.json({ success: true, queue });
   } catch (err) {
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });

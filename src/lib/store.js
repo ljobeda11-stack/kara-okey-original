@@ -498,35 +498,75 @@ function sortQueue(queue) {
   });
 }
 
-// Cloud persistence helpers for Vercel Serverless (Upstash Redis / Vercel KV).
+// Cloud persistence helpers for Vercel Serverless (Upstash Redis / Vercel KV / Vercel Blob).
 // With these env vars set the cloud store becomes the shared source of truth
 // that lets separate serverless instances serve the same karaoke room.
 export function isCloudStoreEnabled() {
-  return Boolean(REDIS_URL && REDIS_TOKEN);
+  return Boolean((REDIS_URL && REDIS_TOKEN) || process.env.BLOB_READ_WRITE_TOKEN);
 }
 
-// Read a room snapshot out of Redis. Returns null when the store is disabled,
-// unreachable, or simply has no entry for this code yet.
+// Read a room snapshot out of cloud storage (Redis or Vercel Blob).
+// Returns null when the store is disabled, unreachable, or simply has no entry for this code yet.
 async function fetchRoomFromCloud(roomCode) {
-  if (!REDIS_URL || !REDIS_TOKEN) return null;
-  try {
-    const res = await fetch(`${REDIS_URL}/get/karaokey:${roomCode}`, {
-      headers: { Authorization: `Bearer ${REDIS_TOKEN}` },
-      cache: 'no-store',
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (!data.result) return null;
-    return typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
-  } catch (e) {
-    // Cloud read silent fallback
-    return null;
+  // 1. Upstash Redis / Vercel KV
+  if (REDIS_URL && REDIS_TOKEN) {
+    try {
+      const res = await fetch(`${REDIS_URL}/get/karaokey:${roomCode}`, {
+        headers: { Authorization: `Bearer ${REDIS_TOKEN}` },
+        cache: 'no-store',
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.result !== undefined && data.result !== null) {
+          let parsed = data.result;
+          if (typeof parsed === 'string') {
+            try {
+              parsed = JSON.parse(parsed);
+              if (typeof parsed === 'string') {
+                parsed = JSON.parse(parsed);
+              }
+            } catch (e) {}
+          }
+          if (parsed && typeof parsed === 'object') {
+            return parsed;
+          }
+        }
+      }
+    } catch (e) {
+      // Cloud read silent fallback
+    }
   }
+
+  // 2. Vercel Blob fallback
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    try {
+      const { get } = await import('@vercel/blob');
+      const result = await get(`karaokey-rooms/${roomCode}.json`, {
+        access: 'public',
+        useCache: false,
+      });
+      if (result && result.stream) {
+        const response = new Response(result.stream);
+        const text = await response.text();
+        let parsed = JSON.parse(text);
+        if (typeof parsed === 'string') {
+          parsed = JSON.parse(parsed);
+        }
+        if (parsed && typeof parsed === 'object') {
+          return parsed;
+        }
+      }
+    } catch (e) {
+      // Blob read silent fallback
+    }
+  }
+
+  return null;
 }
 
 // Merge a cloud snapshot into this instance's copy of the room.
 function applyCloudSnapshot(roomCode, parsed) {
-  if (!parsed) return null;
+  if (!parsed || typeof parsed !== 'object') return null;
   const room = ensureLocalRoom(roomCode);
   if (parsed.nowPlaying !== undefined) room.nowPlaying = parsed.nowPlaying;
   if (Array.isArray(parsed.queue)) room.queue = parsed.queue;
@@ -534,7 +574,7 @@ function applyCloudSnapshot(roomCode, parsed) {
   if (parsed.locked !== undefined) room.locked = parsed.locked;
   if (parsed.maxPerGuest !== undefined) room.maxPerGuest = parsed.maxPerGuest;
   if (parsed.hostPin !== undefined) room.hostPin = parsed.hostPin;
-  if (parsed.singerStats) room.singerStats = parsed.singerStats;
+  if (parsed.singerStats && typeof parsed.singerStats === 'object') room.singerStats = parsed.singerStats;
   room.synthetic = false; // real data straight from the shared store
   return room;
 }
@@ -562,32 +602,51 @@ export async function hydrateRoom(roomCode) {
   return getRoom(code);
 }
 
-async function syncRoomToCloud(roomCode) {
-  if (!REDIS_URL || !REDIS_TOKEN) return;
+export async function syncRoomToCloud(roomCode) {
   const room = rooms.get(roomCode);
   if (!room) return;
-  try {
-    const payload = JSON.stringify({
-      code: room.code,
-      nowPlaying: room.nowPlaying,
-      queue: room.queue,
-      history: room.history,
-      locked: room.locked,
-      maxPerGuest: room.maxPerGuest,
-      hostPin: room.hostPin,
-      singerStats: room.singerStats,
-      updatedAt: Date.now(),
-    });
-    // Set in Redis with 24h expiration (86400 seconds)
-    await fetch(`${REDIS_URL}/set/karaokey:${roomCode}?ex=86400`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${REDIS_TOKEN}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
-  } catch (e) {
-    // Cloud write silent fallback
+  const payload = {
+    code: room.code,
+    nowPlaying: room.nowPlaying,
+    queue: room.queue,
+    history: room.history,
+    locked: room.locked,
+    maxPerGuest: room.maxPerGuest,
+    hostPin: room.hostPin,
+    singerStats: room.singerStats,
+    updatedAt: Date.now(),
+  };
+  const payloadString = JSON.stringify(payload);
+
+  // 1. Upstash Redis / Vercel KV
+  if (REDIS_URL && REDIS_TOKEN) {
+    try {
+      // Set in Redis with 24h expiration (86400 seconds)
+      await fetch(`${REDIS_URL}/set/karaokey:${roomCode}?ex=86400`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${REDIS_TOKEN}`,
+          'Content-Type': 'text/plain',
+        },
+        body: payloadString,
+      });
+    } catch (e) {
+      // Cloud write silent fallback
+    }
+  }
+
+  // 2. Vercel Blob
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    try {
+      const { put } = await import('@vercel/blob');
+      await put(`karaokey-rooms/${roomCode}.json`, payloadString, {
+        access: 'public',
+        addRandomSuffix: false,
+        allowOverwrite: true,
+        cacheControlMaxAge: 0,
+      });
+    } catch (e) {
+      // Blob write silent fallback
+    }
   }
 }

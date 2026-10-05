@@ -97,9 +97,25 @@ export default function GuestPage({ params }) {
         const data = await res.json();
         if (cancelled) return;
         if (res.ok && data.success && data.room) {
-          setNowPlaying(data.room.nowPlaying);
-          setQueue(data.room.queue || []);
-          setRoomError(null);
+          if (!data.room.synthetic) {
+            setNowPlaying(data.room.nowPlaying);
+            setQueue(data.room.queue || []);
+            setRoomError(null);
+          } else {
+            // Room is synthetic on this instance, retry in 1.2s before showing error
+            setTimeout(async () => {
+              if (cancelled) return;
+              try {
+                const retryRes = await fetch(`/api/room/${roomCode}`, { cache: 'no-store' });
+                const retryData = await retryRes.json();
+                if (retryRes.ok && retryData.success && retryData.room && !retryData.room.synthetic) {
+                  setNowPlaying(retryData.room.nowPlaying);
+                  setQueue(retryData.room.queue || []);
+                  setRoomError(null);
+                }
+              } catch (err) {}
+            }, 1200);
+          }
         } else {
           // Attempt retry after 1s before locking out
           setTimeout(async () => {
@@ -108,9 +124,11 @@ export default function GuestPage({ params }) {
               const retryRes = await fetch(`/api/room/${roomCode}`, { cache: 'no-store' });
               const retryData = await retryRes.json();
               if (retryRes.ok && retryData.success && retryData.room) {
-                setNowPlaying(retryData.room.nowPlaying);
-                setQueue(retryData.room.queue || []);
-                setRoomError(null);
+                if (!retryData.room.synthetic) {
+                  setNowPlaying(retryData.room.nowPlaying);
+                  setQueue(retryData.room.queue || []);
+                  setRoomError(null);
+                }
               } else {
                 setRoomError(data.error || 'Room not found');
               }
@@ -189,7 +207,7 @@ export default function GuestPage({ params }) {
         const res = await fetch(`/api/room/${roomCode}`, { cache: 'no-store' });
         if (!cancelled && res.ok) {
           const data = await res.json();
-          if (data.success && data.room) {
+          if (data.success && data.room && !data.room.synthetic) {
             setNowPlaying(data.room.nowPlaying);
             setQueue(data.room.queue || []);
           }
@@ -251,11 +269,21 @@ export default function GuestPage({ params }) {
           setToastMessage(`🎤 "${song.title}"${modeText} added to queue!`);
           setQueuedHistory((prev) => [song, ...prev]);
 
-          // Trigger immediate local state refresh
+          // Optimistically update local state immediately so user sees their song right away
+          if (data.isNowPlaying && data.item) {
+            setNowPlaying(data.item);
+          } else if (data.item) {
+            setQueue((prev) => {
+              if (prev.some((q) => q.queueId === data.item.queueId)) return prev;
+              return [...prev, data.item];
+            });
+          }
+
+          // Refresh room in background (ignoring synthetic empty placeholders)
           fetch(`/api/room/${roomCode}`, { cache: 'no-store' })
             .then((r) => r.json())
             .then((d) => {
-              if (d.success && d.room) {
+              if (d.success && d.room && !d.room.synthetic) {
                 setQueue(d.room.queue || []);
                 setNowPlaying(d.room.nowPlaying);
               }
@@ -274,6 +302,25 @@ export default function GuestPage({ params }) {
   // 4. Vote for a song
   const handleVoteSong = useCallback(
     async (queueId) => {
+      // Optimistic toggle for instant UI response
+      setVotedQueueIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(queueId)) {
+          next.delete(queueId);
+        } else {
+          next.add(queueId);
+        }
+        return next;
+      });
+      setQueue((prev) =>
+        prev.map((item) => {
+          if (item.queueId !== queueId) return item;
+          const isVoted = votedQueueIds.has(queueId);
+          const newVotes = isVoted ? Math.max(0, (item.votes || 0) - 1) : (item.votes || 0) + 1;
+          return { ...item, votes: newVotes };
+        })
+      );
+
       try {
         const res = await fetch(`/api/room/${roomCode}/vote`, {
           method: 'POST',
@@ -285,23 +332,14 @@ export default function GuestPage({ params }) {
         });
 
         const data = await res.json();
-        if (data.success) {
+        if (data.success && data.queue) {
           setQueue(data.queue);
-          setVotedQueueIds((prev) => {
-            const next = new Set(prev);
-            if (next.has(queueId)) {
-              next.delete(queueId);
-            } else {
-              next.add(queueId);
-            }
-            return next;
-          });
         }
       } catch (err) {
         console.error('Error voting:', err);
       }
     },
-    [roomCode, voterId]
+    [roomCode, voterId, votedQueueIds]
   );
 
   // Guest removes own song from queue

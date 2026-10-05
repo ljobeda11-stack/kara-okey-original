@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
-import { getRoom, joinSong, resolveRoomCode } from '@/lib/store';
+import { getRoom, joinSong, resolveRoomCode, hydrateRoom, syncRoomToCloud } from '@/lib/store';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(request, { params }) {
   const code = await resolveRoomCode(request, params);
-  const room = getRoom(code);
+  const room = await hydrateRoom(code);
 
   if (!room) {
     return NextResponse.json({ success: false, error: 'Room not found.' }, { status: 404 });
@@ -33,6 +33,8 @@ export async function POST(request, { params }) {
     if (result.error) {
       return NextResponse.json({ success: false, error: result.error }, { status: 400 });
     }
+
+    await syncRoomToCloud(code);
 
     return NextResponse.json({
       success: true,

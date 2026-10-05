@@ -365,7 +365,7 @@ export default function HostPage() {
     try {
       const res = await fetch(`/api/room/${roomCode}`);
       const data = await res.json();
-      if (data.success && data.room) {
+      if (data.success && data.room && !data.room.synthetic) {
         setQueue(data.room.queue || []);
         setNowPlaying(data.room.nowPlaying);
       }

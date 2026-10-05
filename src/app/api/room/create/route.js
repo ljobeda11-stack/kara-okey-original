@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
-import { generateRoomCode, getOrCreateRoom } from '@/lib/store';
+import { generateRoomCode, getOrCreateRoom, syncRoomToCloud } from '@/lib/store';
 
 export async function POST() {
   const code = generateRoomCode();
   const room = getOrCreateRoom(code);
+  await syncRoomToCloud(code);
 
   return NextResponse.json({
     success: true,

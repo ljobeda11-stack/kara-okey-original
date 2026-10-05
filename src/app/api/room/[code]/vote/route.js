@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { voteForSong, resolveRoomCode } from '@/lib/store';
+import { voteForSong, resolveRoomCode, hydrateRoom, syncRoomToCloud } from '@/lib/store';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,6 +16,7 @@ export async function POST(request, { params }) {
       );
     }
 
+    await hydrateRoom(code);
     const result = voteForSong(code, queueId, voterId || 'anon');
     if (!result) {
       return NextResponse.json(
@@ -23,6 +24,8 @@ export async function POST(request, { params }) {
         { status: 404 }
       );
     }
+
+    await syncRoomToCloud(code);
 
     return NextResponse.json({
       success: true,
