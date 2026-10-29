@@ -17,6 +17,7 @@ export default function SearchTab({
   onQueueSong,
   favorites = [],
   onToggleFavorite,
+  queuedSongIds = new Set(),
 }) {
   const [query, setQuery] = useState('');
   const [playlists, setPlaylists] = useState(FALLBACK_PLAYLISTS);
@@ -26,7 +27,6 @@ export default function SearchTab({
   const [browseDescription, setBrowseDescription] = useState('');
   const [searchSongs, setSearchSongs] = useState([]);
   const [searching, setSearching] = useState(false);
-  const [queuedIds, setQueuedIds] = useState(new Set());
 
   // Performance mode state: 'solo' | 'duet' | 'group'
   const [selectedMode, setSelectedMode] = useState('solo');
@@ -112,14 +112,6 @@ export default function SearchTab({
     // Attach selected performance mode
     const songWithMode = { ...song, mode: selectedMode };
     onQueueSong(songWithMode);
-    setQueuedIds((prev) => new Set([...prev, song.id]));
-    setTimeout(() => {
-      setQueuedIds((prev) => {
-        const next = new Set(prev);
-        next.delete(song.id);
-        return next;
-      });
-    }, 2000);
   };
 
   const loading = isSearchMode ? searching : browseLoading;
@@ -325,7 +317,7 @@ export default function SearchTab({
               key={song.id}
               song={song}
               onQueue={handleQueueClick}
-              isQueued={queuedIds.has(song.id)}
+              isQueued={queuedSongIds.has(song.id)}
               isFavorite={favorites.some((f) => f.id === song.id)}
               onToggleFavorite={onToggleFavorite}
               onPreview={(s) => setPreviewSong(s)}
@@ -340,7 +332,7 @@ export default function SearchTab({
         isOpen={!!previewSong}
         onClose={() => setPreviewSong(null)}
         onQueue={handleQueueClick}
-        isQueued={previewSong ? queuedIds.has(previewSong.id) : false}
+        isQueued={queuedSongIds.has(previewSong.id)}
         isFavorite={previewSong ? favorites.some((f) => f.id === previewSong.id) : false}
         onToggleFavorite={onToggleFavorite}
       />

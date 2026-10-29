@@ -1,5 +1,11 @@
 import { NextResponse } from 'next/server';
-import { reorderQueue, resolveRoomCode, hydrateRoom, syncRoomToCloud } from '@/lib/store';
+import {
+  reorderQueue,
+  resolveRoomCode,
+  hydrateRoom,
+  syncRoomToCloud,
+  verifyHostPin,
+} from '@/lib/store';
 
 export const dynamic = 'force-dynamic';
 
@@ -7,7 +13,7 @@ export async function PATCH(request, { params }) {
   const code = await resolveRoomCode(request, params);
   try {
     const body = await request.json().catch(() => ({}));
-    const { orderedQueueIds } = body;
+    const { orderedQueueIds, pin } = body;
 
     if (!Array.isArray(orderedQueueIds)) {
       return NextResponse.json(
@@ -16,7 +22,16 @@ export async function PATCH(request, { params }) {
       );
     }
 
-    await hydrateRoom(code);
+    const room = await hydrateRoom(code);
+    if (!room) {
+      return NextResponse.json({ success: false, error: 'Room not found.' }, { status: 404 });
+    }
+
+    // Require host PIN for reorder if one is set
+    if (room.hostPin && !verifyHostPin(code, pin)) {
+      return NextResponse.json({ success: false, error: 'Invalid host PIN.' }, { status: 403 });
+    }
+
     const queue = reorderQueue(code, orderedQueueIds);
     if (queue === null) {
       return NextResponse.json({ success: false, error: 'Room not found.' }, { status: 404 });

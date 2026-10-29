@@ -46,6 +46,15 @@ export default function GuestPage({ params }) {
   const [upNextSong, setUpNextSong] = useState(null);
   const alertedRef = useRef(new Set());
 
+  // Connection state: 'connected' | 'reconnecting' | 'offline'
+  const [connectionMode, setConnectionMode] = useState('connected');
+  // Ref keeps the latest value accessible inside the poll closure
+  // without restarting the interval on every mode transition.
+  const connectionModeRef = useRef(connectionMode);
+  connectionModeRef.current = connectionMode;
+
+  const [rotationMode, setRotationMode] = useState('off');
+
   // Keep room code up to date if router resolves later
   useEffect(() => {
     const c = extractCode();
@@ -159,6 +168,10 @@ export default function GuestPage({ params }) {
       if (closed) return;
       eventSource = new EventSource(`/api/room/${roomCode}/events`);
 
+      eventSource.addEventListener('open', () => {
+        if (!closed) setConnectionMode('connected');
+      });
+
       eventSource.addEventListener('queue_updated', (e) => {
         try {
           const payload = JSON.parse(e.data);
@@ -175,11 +188,19 @@ export default function GuestPage({ params }) {
         } catch (err) {}
       });
 
+      eventSource.addEventListener('room_settings_updated', (e) => {
+        try {
+          const payload = JSON.parse(e.data);
+          if (payload.data.rotationMode !== undefined) setRotationMode(payload.data.rotationMode);
+        } catch (err) {}
+      });
+
       eventSource.onerror = () => {
         try {
           eventSource.close();
         } catch (e) {}
         clearTimeout(reconnectTimer);
+        setConnectionMode('reconnecting');
         reconnectTimer = setTimeout(connectSSE, 4000);
       };
     }
@@ -210,17 +231,26 @@ export default function GuestPage({ params }) {
           if (data.success && data.room && !data.room.synthetic) {
             setNowPlaying(data.room.nowPlaying);
             setQueue(data.room.queue || []);
+            if (connectionModeRef.current === 'reconnecting') setConnectionMode('connected');
+          } else if (!cancelled && res.status !== 404) {
+            setConnectionMode('offline');
           }
+        } else if (!cancelled && res.status === 404) {
+          setRoomError('Room not found');
         }
-      } catch (e) {}
+      } catch (e) {
+        if (!cancelled) setConnectionMode('offline');
+      }
     };
 
     const interval = setInterval(poll, 2500);
+    // Initial poll to set initial state
+    poll();
     return () => {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [roomCode, roomError]);
+  }, [roomCode, roomError, connectionMode]);
 
   // Check if current user is #1 in queue ("You're Up Next!" alert)
   useEffect(() => {
@@ -562,6 +592,8 @@ export default function GuestPage({ params }) {
         roomCode={roomCode}
         singerName={singerName}
         onEditName={() => setActiveTab('profile')}
+        connectionMode={connectionMode}
+        rotationMode={rotationMode}
       />
 
       {/* Main Tab Content */}
@@ -571,6 +603,7 @@ export default function GuestPage({ params }) {
             onQueueSong={handleQueueSong}
             favorites={favorites}
             onToggleFavorite={handleToggleFavorite}
+            queuedSongIds={new Set(queue.map((q) => q.id))}
           />
         )}
 

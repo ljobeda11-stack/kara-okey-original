@@ -39,6 +39,7 @@ function createRoomShell(code) {
     locked: false,
     maxPerGuest: 0, // 0 = unlimited
     hostPin: null, // Host admin PIN
+    rotationMode: 'off', // 'off' | 'fair'
     singerStats: {}, // { [name]: { songsSung: 0, cheersReceived: 0, lastSong: '' } }
     // true = placeholder fabricated for a code this instance had never seen.
     // Such a room must never be handed out as an authoritative snapshot.
@@ -56,6 +57,7 @@ function ensureLocalRoom(roomCode) {
   // Ensure backward compatibility
   if (room.locked === undefined) room.locked = false;
   if (room.maxPerGuest === undefined) room.maxPerGuest = 0;
+  if (room.rotationMode === undefined) room.rotationMode = 'off';
   if (!room.singerStats) room.singerStats = {};
   if (room.guestCount === undefined || room.guestCount < 1) room.guestCount = 1;
   return room;
@@ -191,7 +193,7 @@ export function addSongToQueue(roomCode, song, singerName = 'Guest Singer', opti
   }
 
   room.queue.push(queueItem);
-  sortQueue(room.queue);
+  sortQueue(room.queue, room.rotationMode);
 
   broadcastRoomEvent(roomCode, 'queue_updated', {
     queue: room.queue,
@@ -222,7 +224,7 @@ export function voteForSong(roomCode, queueId, voterId = 'anon') {
     item.votes += 1;
   }
 
-  sortQueue(room.queue);
+  sortQueue(room.queue, room.rotationMode);
 
   broadcastRoomEvent(roomCode, 'queue_updated', {
     queue: room.queue,
@@ -371,6 +373,26 @@ export function setMaxPerGuest(roomCode, maxPerGuest) {
   return room.maxPerGuest;
 }
 
+// Host controls: Toggle fair singer rotation
+export function setRotationMode(roomCode, mode) {
+  const room = getRoom(roomCode);
+  if (!room) return null;
+
+  const validModes = ['off', 'fair'];
+  room.rotationMode = validModes.includes(mode) ? mode : 'off';
+
+  // Re-sort queue when rotation mode changes
+  sortQueue(room.queue, room.rotationMode);
+
+  broadcastRoomEvent(roomCode, 'room_settings_updated', {
+    locked: room.locked,
+    maxPerGuest: room.maxPerGuest,
+    rotationMode: room.rotationMode,
+  });
+
+  return room.rotationMode;
+}
+
 // Host controls: Set host PIN
 export function setHostPin(roomCode, pin) {
   const room = getRoom(roomCode);
@@ -489,7 +511,49 @@ export function getSingerLeaderboard(roomCode) {
 }
 
 // Helper: sort queue descending by votes, then ascending by addedAt timestamp
-function sortQueue(queue) {
+function sortQueue(queue, rotationMode = 'off') {
+  if (rotationMode === 'fair' && queue.length > 1) {
+    // Group by singer (case-insensitive)
+    const groups = new Map();
+    for (const item of queue) {
+      const key = (item.singerName || 'Guest').trim().toLowerCase();
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(item);
+    }
+
+    // Sort each group by votes desc, then addedAt asc
+    for (const group of groups.values()) {
+      group.sort((a, b) => {
+        if (b.votes !== a.votes) return b.votes - a.votes;
+        return a.addedAt - b.addedAt;
+      });
+    }
+
+    // Order groups by earliest song added (round-robin fairness)
+    const sortedKeys = [...groups.keys()].sort((a, b) => {
+      return groups.get(a)[0].addedAt - groups.get(b)[0].addedAt;
+    });
+
+    // Interleave: pick one from each singer in order, repeat
+    const result = [];
+    let done = false;
+    while (!done) {
+      done = true;
+      for (const key of sortedKeys) {
+        const group = groups.get(key);
+        if (group.length > 0) {
+          result.push(group.shift());
+          done = false;
+        }
+      }
+    }
+
+    // Replace queue in-place while preserving references
+    queue.splice(0, queue.length, ...result);
+    return;
+  }
+
+  // Default: sort by votes desc, then addedAt asc
   queue.sort((a, b) => {
     if (b.votes !== a.votes) {
       return b.votes - a.votes;
@@ -631,7 +695,7 @@ export async function syncRoomToCloud(roomCode) {
         body: payloadString,
       });
     } catch (e) {
-      // Cloud write silent fallback
+      console.error('[store] Redis write failed:', e.message);
     }
   }
 
@@ -646,7 +710,7 @@ export async function syncRoomToCloud(roomCode) {
         cacheControlMaxAge: 0,
       });
     } catch (e) {
-      // Blob write silent fallback
+      console.error('[store] Blob write failed:', e.message);
     }
   }
 }

@@ -1,11 +1,30 @@
 import { NextResponse } from 'next/server';
-import { advanceQueue, resolveRoomCode, hydrateRoom, syncRoomToCloud } from '@/lib/store';
+import {
+  advanceQueue,
+  resolveRoomCode,
+  hydrateRoom,
+  syncRoomToCloud,
+  verifyHostPin,
+} from '@/lib/store';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(request, { params }) {
   const code = await resolveRoomCode(request, params);
-  await hydrateRoom(code);
+  const room = await hydrateRoom(code);
+
+  if (!room) {
+    return NextResponse.json({ success: false, error: 'Room not found.' }, { status: 404 });
+  }
+
+  // Require host PIN for skip if one is set
+  if (room.hostPin) {
+    const body = await request.json().catch(() => ({}));
+    if (!verifyHostPin(code, body.pin)) {
+      return NextResponse.json({ success: false, error: 'Invalid host PIN.' }, { status: 403 });
+    }
+  }
+
   const result = advanceQueue(code);
 
   if (!result) {

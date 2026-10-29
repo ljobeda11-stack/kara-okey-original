@@ -1,9 +1,10 @@
 'use client';
 
 import Logo from '@/components/shared/Logo';
-import { Mic, Radio } from 'lucide-react';
+import { Mic, Radio, Users } from 'lucide-react';
+import ConnectionStatus from './ConnectionStatus';
 
-export default function GuestHeader({ roomCode, singerName, onEditName }) {
+export default function GuestHeader({ roomCode, singerName, onEditName, connectionMode = 'connected', rotationMode = 'off' }) {
   return (
     <header
       style={{
@@ -22,6 +23,31 @@ export default function GuestHeader({ roomCode, singerName, onEditName }) {
       <Logo size="sm" />
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <ConnectionStatus mode={connectionMode} />
+
+        {rotationMode === 'fair' && (
+          <div
+            title="Fair rotation enabled — singers take turns"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              padding: '3px 8px',
+              borderRadius: 'var(--radius-full)',
+              background: 'rgba(168, 85, 247, 0.2)',
+              border: '1px solid rgba(168, 85, 247, 0.45)',
+              color: '#c084fc',
+              fontSize: '0.7rem',
+              fontWeight: 600,
+              letterSpacing: '0.01em',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <Users size={10} />
+            <span>Rotation ON</span>
+          </div>
+        )}
+
         <button
           onClick={onEditName}
           className="badge-singer"

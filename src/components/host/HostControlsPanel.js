@@ -25,6 +25,7 @@ export default function HostControlsPanel({
 }) {
   const [locked, setLocked] = useState(false);
   const [maxPerGuest, setMaxPerGuest] = useState(0);
+  const [rotationMode, setRotationMode] = useState('off');
   const [hasPin, setHasPin] = useState(false);
   const [pinInput, setPinInput] = useState('');
   const [isUnlocked, setIsUnlocked] = useState(true);
@@ -42,6 +43,7 @@ export default function HostControlsPanel({
         if (data.success) {
           setLocked(data.locked);
           setMaxPerGuest(data.maxPerGuest || 0);
+          setRotationMode(data.rotationMode || 'off');
           setHasPin(data.hasPin);
           if (data.hasPin) {
             setIsUnlocked(false);
@@ -164,6 +166,31 @@ export default function HostControlsPanel({
       }
     } catch (err) {
       notify('Failed to update limit');
+    }
+  };
+
+  const handleToggleRotation = async () => {
+    setLoading(true);
+    try {
+      const newMode = rotationMode === 'off' ? 'fair' : 'off';
+      const res = await fetch(`/api/room/${roomCode}/controls`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'toggle_rotation',
+          mode: newMode,
+          pin: pinInput,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setRotationMode(data.rotationMode);
+        notify(data.rotationMode === 'fair' ? 'Fair rotation enabled!' : 'Fair rotation disabled');
+      }
+    } catch (err) {
+      notify('Failed to toggle rotation');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -389,6 +416,47 @@ export default function HostControlsPanel({
               >
                 <Trash2 size={16} />
                 <span>Clear All ({queue.length})</span>
+              </button>
+            </div>
+
+            {/* Fair Singer Rotation */}
+            <div
+              className="glass-card"
+              style={{
+                padding: '14px',
+                borderRadius: 'var(--radius-md)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', fontWeight: 700 }}>
+                  <Users size={16} color="var(--neon-purple)" />
+                  <span>Fair Singer Rotation</span>
+                </div>
+                <span style={{ fontSize: '0.75rem', color: rotationMode === 'fair' ? 'var(--neon-purple)' : 'var(--text-muted)' }}>
+                  {rotationMode === 'fair' ? 'ON' : 'OFF'}
+                </span>
+              </div>
+              <p style={{ fontSize: '0.78rem', color: 'var(--text-dim)', margin: '0 0 12px 0' }}>
+                Alternates singers so everyone gets a turn. Votes still rank songs within each singer.
+              </p>
+              <button
+                onClick={handleToggleRotation}
+                disabled={loading}
+                style={{
+                  width: '100%',
+                  padding: '10px',
+                  borderRadius: 'var(--radius-md)',
+                  background: rotationMode === 'fair' ? 'rgba(168, 85, 247, 0.2)' : 'rgba(255,255,255,0.05)',
+                  border: `1px solid ${rotationMode === 'fair' ? 'rgba(168, 85, 247, 0.5)' : 'var(--border-glass)'}`,
+                  color: rotationMode === 'fair' ? '#c084fc' : 'var(--text-muted)',
+                  fontSize: '0.85rem',
+                  fontWeight: 700,
+                  cursor: loading ? 'not-allowed' : 'pointer',
+                  opacity: loading ? 0.6 : 1,
+                  transition: 'all 0.2s',
+                }}
+              >
+                {rotationMode === 'fair' ? 'Disable Rotation' : 'Enable Fair Rotation'}
               </button>
             </div>
 

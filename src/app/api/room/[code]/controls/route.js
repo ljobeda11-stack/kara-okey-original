@@ -4,6 +4,7 @@ import {
   clearQueue,
   setQueueLocked,
   setMaxPerGuest,
+  setRotationMode,
   setHostPin,
   verifyHostPin,
   removeFromQueue,
@@ -26,6 +27,7 @@ export async function GET(request, { params }) {
     success: true,
     locked: !!room.locked,
     maxPerGuest: room.maxPerGuest || 0,
+    rotationMode: room.rotationMode || 'off',
     hasPin: !!room.hostPin,
     queueCount: (room.queue || []).length,
     guestCount: room.guestCount || 1,
@@ -81,6 +83,12 @@ export async function POST(request, { params }) {
       const maxPerGuest = setMaxPerGuest(code, body.maxPerGuest);
       await syncRoomToCloud(code);
       return NextResponse.json({ success: true, maxPerGuest });
+    }
+
+    if (action === 'toggle_rotation') {
+      const rotationMode = setRotationMode(code, body.mode);
+      await syncRoomToCloud(code);
+      return NextResponse.json({ success: true, rotationMode });
     }
 
     if (action === 'remove_song') {
